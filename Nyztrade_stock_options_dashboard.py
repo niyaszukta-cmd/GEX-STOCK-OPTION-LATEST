@@ -1,12 +1,11 @@
 # ============================================================================
-# NYZTrade Historical Stock Options GEX/DEX Dashboard - ENHANCED VERSION
-# Features: Stock Options | Weekly/Monthly | VANNA & CHARM | Gamma Flip | 1-min
+# NYZTrade Stock Options GEX/DEX Dashboard - UNIFIED WITH SCREENER
+# Features: Full Analysis + Multi-Stock Screener | All-in-One
 # ============================================================================
 
 import subprocess
 import sys
 
-# Auto-install required packages
 def install_packages():
     """Install required packages if not already installed"""
     required = {
@@ -26,10 +25,8 @@ def install_packages():
             print(f"Installing {package}...")
             subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name, "-q"])
 
-# Install packages first
 install_packages()
 
-# Now import everything
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -41,7 +38,7 @@ import pytz
 import requests
 import time
 from dataclasses import dataclass
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -50,8 +47,8 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 
 st.set_page_config(
-    page_title="NYZTrade Stock Options GEX/DEX",
-    page_icon="📈",
+    page_title="NYZTrade Stock Options | Unified",
+    page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -61,24 +58,16 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
     
-    /* Hide GitHub link */
     header[data-testid="stHeader"] a[href*="github"] {
-        display: none !important;
-    }
-    
-    button[kind="header"][data-testid="baseButton-header"] svg {
         display: none !important;
     }
     
     :root {
         --bg-primary: #0a0e17;
-        --bg-secondary: #111827;
         --bg-card: #1a2332;
-        --bg-card-hover: #232f42;
         --accent-green: #10b981;
         --accent-red: #ef4444;
         --accent-blue: #3b82f6;
-        --accent-purple: #8b5cf6;
         --accent-yellow: #f59e0b;
         --accent-cyan: #06b6d4;
         --text-primary: #f1f5f9;
@@ -97,24 +86,6 @@ st.markdown("""
         border-radius: 16px;
         padding: 24px 32px;
         margin-bottom: 24px;
-        backdrop-filter: blur(10px);
-    }
-    
-    .main-title {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 2.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin: 0;
-    }
-    
-    .sub-title {
-        font-family: 'JetBrains Mono', monospace;
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-        margin-top: 8px;
     }
     
     .metric-card {
@@ -126,7 +97,6 @@ st.markdown("""
     }
     
     .metric-card:hover {
-        background: var(--bg-card-hover);
         transform: translateY(-2px);
         box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
     }
@@ -135,32 +105,44 @@ st.markdown("""
     .metric-card.negative { border-left: 4px solid var(--accent-red); }
     .metric-card.neutral { border-left: 4px solid var(--accent-yellow); }
     
-    .metric-label {
-        font-family: 'JetBrains Mono', monospace;
-        color: var(--text-muted);
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin-bottom: 8px;
+    .screener-card {
+        background: var(--bg-card);
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        padding: 20px;
+        margin: 10px 0;
+        transition: all 0.3s ease;
     }
     
-    .metric-value {
+    .screener-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+    }
+    
+    .screener-card.bullish { border-left: 4px solid var(--accent-green); }
+    .screener-card.bearish { border-left: 4px solid var(--accent-red); }
+    
+    .opportunity-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 20px;
         font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        line-height: 1.2;
+        font-weight: 600;
+        font-size: 0.85rem;
     }
     
-    .metric-value.positive { color: var(--accent-green); }
-    .metric-value.negative { color: var(--accent-red); }
-    .metric-value.neutral { color: var(--accent-yellow); }
+    .opportunity-badge.long {
+        background: rgba(16, 185, 129, 0.2);
+        color: var(--accent-green);
+        border: 1px solid rgba(16, 185, 129, 0.4);
+    }
     
-    .metric-delta {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.8rem;
-        margin-top: 8px;
-        color: var(--text-secondary);
+    .opportunity-badge.short {
+        background: rgba(239, 68, 68, 0.2);
+        color: var(--accent-red);
+        border: 1px solid rgba(239, 68, 68, 0.4);
     }
     
     .signal-badge {
@@ -191,28 +173,11 @@ st.markdown("""
         color: var(--accent-yellow);
         border: 1px solid rgba(245, 158, 11, 0.3);
     }
-    
-    .history-indicator {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 14px;
-        background: rgba(59, 130, 246, 0.1);
-        border: 1px solid rgba(59, 130, 246, 0.3);
-        border-radius: 20px;
-    }
-    
-    .history-dot {
-        width: 8px;
-        height: 8px;
-        background: var(--accent-blue);
-        border-radius: 50%;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# CONFIGURATION - POPULAR STOCK OPTIONS
+# CONFIGURATION
 # ============================================================================
 
 @dataclass
@@ -220,42 +185,17 @@ class DhanConfig:
     client_id: str = "1100480354"
     access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3Nzc1Mzk3LCJhcHBfaWQiOiJlZDMwMzI5NCIsImlhdCI6MTc2NzY4ODk5NywidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.BeP4GfNg5r1JO2L7Zr15I6wPF523BCJyHlilBZc0dq_Yg4MNN-PHWpxF1VjWd2LatSUbB7lwkJ1GaYuflLbqAQ"
 
-# Popular Stock Options with their Dhan Security IDs
 DHAN_STOCK_SECURITY_IDS = {
-    # High Volume Stocks
-    "RELIANCE": 2885,
-    "TCS": 11536,
-    "HDFCBANK": 1333,
-    "INFY": 1594,
-    "ICICIBANK": 4963,
-    "SBIN": 3045,
-    "BHARTIARTL": 1195,
-    "ITC": 1660,
-    "KOTAKBANK": 1922,
-    "LT": 2980,
-    "AXISBANK": 5900,
-    "HINDUNILVR": 1394,
-    "WIPRO": 3787,
-    "MARUTI": 10999,
-    "BAJFINANCE": 317,
-    "HCLTECH": 7229,
-    "ASIANPAINT": 157,
-    "TITAN": 3506,
-    "ULTRACEMCO": 11532,
-    "SUNPHARMA": 3351,
-    "TATAMOTORS": 3456,
-    "TATASTEEL": 3499,
-    "TECHM": 13538,
-    "POWERGRID": 2752,
-    "NTPC": 11630,
-    "ONGC": 2475,
-    "M&M": 2031,
-    "BAJAJFINSV": 16675,
-    "ADANIPORTS": 3718,
-    "COALINDIA": 20374,
+    "RELIANCE": 2885, "TCS": 11536, "HDFCBANK": 1333, "INFY": 1594,
+    "ICICIBANK": 4963, "SBIN": 3045, "BHARTIARTL": 1195, "ITC": 1660,
+    "KOTAKBANK": 1922, "LT": 2980, "AXISBANK": 5900, "HINDUNILVR": 1394,
+    "WIPRO": 3787, "MARUTI": 10999, "BAJFINANCE": 317, "HCLTECH": 7229,
+    "ASIANPAINT": 157, "TITAN": 3506, "ULTRACEMCO": 11532, "SUNPHARMA": 3351,
+    "TATAMOTORS": 3456, "TATASTEEL": 3499, "TECHM": 13538, "POWERGRID": 2752,
+    "NTPC": 11630, "ONGC": 2475, "M&M": 2031, "BAJAJFINSV": 16675,
+    "ADANIPORTS": 3718, "COALINDIA": 20374,
 }
 
-# Stock-specific configurations (lot sizes and typical strike intervals)
 STOCK_CONFIG = {
     "RELIANCE": {"lot_size": 250, "strike_interval": 10},
     "TCS": {"lot_size": 150, "strike_interval": 25},
@@ -289,11 +229,10 @@ STOCK_CONFIG = {
     "COALINDIA": {"lot_size": 2040, "strike_interval": 5},
 }
 
-# Indian timezone
 IST = pytz.timezone('Asia/Kolkata')
 
 # ============================================================================
-# BLACK-SCHOLES CALCULATOR (ENHANCED WITH VANNA & CHARM)
+# BLACK-SCHOLES & GREEKS
 # ============================================================================
 
 class BlackScholesCalculator:
@@ -342,41 +281,33 @@ class BlackScholesCalculator:
     
     @staticmethod
     def calculate_vanna(S, K, T, r, sigma):
-        """Calculate Vanna (dDelta/dVol)"""
         if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
             return 0
         try:
             d1 = BlackScholesCalculator.calculate_d1(S, K, T, r, sigma)
             d2 = BlackScholesCalculator.calculate_d2(S, K, T, r, sigma)
-            vanna = -norm.pdf(d1) * d2 / sigma
-            return vanna
+            return -norm.pdf(d1) * d2 / sigma
         except:
             return 0
     
     @staticmethod
     def calculate_charm(S, K, T, r, sigma, option_type='call'):
-        """Calculate Charm (Delta Decay)"""
         if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
             return 0
         try:
             d1 = BlackScholesCalculator.calculate_d1(S, K, T, r, sigma)
             d2 = BlackScholesCalculator.calculate_d2(S, K, T, r, sigma)
-            charm = -norm.pdf(d1) * (2*r*T - d2*sigma*np.sqrt(T)) / (2*T*sigma*np.sqrt(T))
-            return charm
+            return -norm.pdf(d1) * (2*r*T - d2*sigma*np.sqrt(T)) / (2*T*sigma*np.sqrt(T))
         except:
             return 0
 
 # ============================================================================
-# GAMMA FLIP ZONE CALCULATOR
+# GAMMA FLIP ZONE DETECTION
 # ============================================================================
 
 def identify_gamma_flip_zones(df: pd.DataFrame, spot_price: float) -> List[Dict]:
-    """
-    Identifies gamma flip zones where GEX crosses zero.
-    Returns list of flip zones with strike levels and direction indicators.
-    """
+    """Identifies gamma flip zones where GEX crosses zero"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
     flip_zones = []
     
     for i in range(len(df_sorted) - 1):
@@ -385,30 +316,17 @@ def identify_gamma_flip_zones(df: pd.DataFrame, spot_price: float) -> List[Dict]
         current_strike = df_sorted.iloc[i]['strike']
         next_strike = df_sorted.iloc[i + 1]['strike']
         
-        # Check if GEX crosses zero between these strikes
         if (current_gex > 0 and next_gex < 0) or (current_gex < 0 and next_gex > 0):
-            # Interpolate the exact flip strike
             flip_strike = current_strike + (next_strike - current_strike) * (abs(current_gex) / (abs(current_gex) + abs(next_gex)))
             
-            # Determine flip direction based on spot position
             if spot_price < flip_strike:
-                if current_gex > 0:
-                    direction = "upward"
-                    arrow = "↑"
-                    color = "#ef4444"
-                else:
-                    direction = "downward"
-                    arrow = "↓"
-                    color = "#10b981"
+                direction = "upward" if current_gex > 0 else "downward"
+                arrow = "↑" if current_gex > 0 else "↓"
+                color = "#ef4444" if current_gex > 0 else "#10b981"
             else:
-                if current_gex < 0:
-                    direction = "downward"
-                    arrow = "↓"
-                    color = "#10b981"
-                else:
-                    direction = "upward"
-                    arrow = "↑"
-                    color = "#ef4444"
+                direction = "downward" if current_gex < 0 else "upward"
+                arrow = "↓" if current_gex < 0 else "↑"
+                color = "#10b981" if current_gex < 0 else "#ef4444"
             
             flip_zones.append({
                 'strike': flip_strike,
@@ -419,13 +337,50 @@ def identify_gamma_flip_zones(df: pd.DataFrame, spot_price: float) -> List[Dict]
                 'direction': direction,
                 'arrow': arrow,
                 'color': color,
-                'flip_type': 'Positive→Negative' if current_gex > 0 else 'Negative→Positive'
+                'flip_type': 'Positive→Negative' if current_gex > 0 else 'Negative→Positive',
+                'distance_from_spot': abs(flip_strike - spot_price),
+                'distance_pct': abs(flip_strike - spot_price) / spot_price * 100
             })
     
     return flip_zones
 
+def analyze_flip_zone_position(spot_price: float, flip_zones: List[Dict]) -> Dict:
+    """Analyze spot position relative to flip zones"""
+    if not flip_zones:
+        return {
+            'has_flip_zones': False,
+            'position': 'no_flip_zones',
+            'signal': 'neutral',
+            'nearest_flip': None,
+            'description': 'No gamma flip zones detected'
+        }
+    
+    nearest_flip = min(flip_zones, key=lambda x: x['distance_from_spot'])
+    
+    above_flip = any(spot_price > zone['strike'] for zone in flip_zones)
+    below_flip = any(spot_price < zone['strike'] for zone in flip_zones)
+    
+    if above_flip and not below_flip:
+        position = 'above_all'
+        signal = 'bullish_continuation' if nearest_flip['direction'] == 'upward' else 'bearish_reversal'
+    elif below_flip and not above_flip:
+        position = 'below_all'
+        signal = 'bearish_continuation' if nearest_flip['direction'] == 'downward' else 'bullish_reversal'
+    else:
+        position = 'between'
+        signal = 'range_bound'
+    
+    return {
+        'has_flip_zones': True,
+        'position': position,
+        'signal': signal,
+        'nearest_flip': nearest_flip,
+        'all_flips': flip_zones,
+        'flip_count': len(flip_zones)
+    }
+
 # ============================================================================
-# DHAN ROLLING API FETCHER FOR STOCKS (ENHANCED)
+# DATA FETCHER (UNIFIED)
 # ============================================================================
 
 class DhanStockOptionsFetcher:
@@ -443,18 +398,17 @@ class DhanStockOptionsFetcher:
     def fetch_rolling_data(self, symbol: str, from_date: str, to_date: str, 
                           strike_type: str = "ATM", option_type: str = "CALL", 
                           interval: str = "60", expiry_code: int = 1, expiry_flag: str = "MONTH"):
-        """Fetch historical rolling stock options data"""
+        """Fetch rolling options data"""
         try:
             security_id = DHAN_STOCK_SECURITY_IDS.get(symbol)
             if not security_id:
-                st.error(f"Security ID not found for {symbol}")
                 return None
             
             payload = {
                 "exchangeSegment": "NSE_FNO",
                 "interval": interval,
                 "securityId": security_id,
-                "instrument": "OPTSTK",  # Stock options
+                "instrument": "OPTSTK",
                 "expiryFlag": expiry_flag,
                 "expiryCode": expiry_code,
                 "strike": strike_type,
@@ -473,18 +427,13 @@ class DhanStockOptionsFetcher:
             
             if response.status_code == 200:
                 return response.json().get('data', {})
-            else:
-                st.warning(f"API returned status {response.status_code} for {symbol} {strike_type} {option_type}")
             return None
-        except Exception as e:
-            st.error(f"API Error for {symbol}: {str(e)}")
+        except:
             return None
     
     def process_historical_data(self, symbol: str, target_date: str, strikes: List[str], 
                                interval: str = "60", expiry_code: int = 1, expiry_flag: str = "MONTH"):
-        """Process historical stock options data with VANNA and CHARM"""
-        
-        # Convert to datetime
+        """Process historical stock options data"""
         target_dt = datetime.strptime(target_date, '%Y-%m-%d')
         from_date = (target_dt - timedelta(days=2)).strftime('%Y-%m-%d')
         to_date = (target_dt + timedelta(days=2)).strftime('%Y-%m-%d')
@@ -500,16 +449,14 @@ class DhanStockOptionsFetcher:
         current_step = 0
         
         for strike_type in strikes:
-            status_text.text(f"Fetching {symbol} {strike_type} ({expiry_flag} Expiry {expiry_code})...")
+            status_text.text(f"Fetching {symbol} {strike_type}...")
             
-            # Fetch CALL data
             call_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "CALL", 
                                                 interval, expiry_code, expiry_flag)
             current_step += 1
             progress_bar.progress(current_step / total_steps)
             time.sleep(1)
             
-            # Fetch PUT data
             put_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "PUT", 
                                                interval, expiry_code, expiry_flag)
             current_step += 1
@@ -529,11 +476,9 @@ class DhanStockOptionsFetcher:
             
             for i, ts in enumerate(timestamps):
                 try:
-                    # Convert timestamp to IST
                     dt_utc = datetime.fromtimestamp(ts, tz=pytz.UTC)
                     dt_ist = dt_utc.astimezone(IST)
                     
-                    # Filter for target date
                     if dt_ist.date() != target_dt.date():
                         continue
                     
@@ -543,7 +488,6 @@ class DhanStockOptionsFetcher:
                     if spot_price == 0 or strike_price == 0:
                         continue
                     
-                    # Get OI and other data
                     call_oi = ce_data.get('oi', [0])[i] if i < len(ce_data.get('oi', [])) else 0
                     put_oi = pe_data.get('oi', [0])[i] if i < len(pe_data.get('oi', [])) else 0
                     call_volume = ce_data.get('volume', [0])[i] if i < len(ce_data.get('volume', [])) else 0
@@ -551,24 +495,20 @@ class DhanStockOptionsFetcher:
                     call_iv = ce_data.get('iv', [15])[i] if i < len(ce_data.get('iv', [])) else 15
                     put_iv = pe_data.get('iv', [15])[i] if i < len(pe_data.get('iv', [])) else 15
                     
-                    # Calculate Greeks
-                    time_to_expiry = 30 / 365  # Approximate for monthly
+                    time_to_expiry = 30 / 365
                     call_iv_dec = call_iv / 100 if call_iv > 1 else call_iv
                     put_iv_dec = put_iv / 100 if put_iv > 1 else put_iv
                     
-                    # Standard Greeks
                     call_gamma = self.bs_calc.calculate_gamma(spot_price, strike_price, time_to_expiry, self.risk_free_rate, call_iv_dec)
                     put_gamma = self.bs_calc.calculate_gamma(spot_price, strike_price, time_to_expiry, self.risk_free_rate, put_iv_dec)
                     call_delta = self.bs_calc.calculate_call_delta(spot_price, strike_price, time_to_expiry, self.risk_free_rate, call_iv_dec)
                     put_delta = self.bs_calc.calculate_put_delta(spot_price, strike_price, time_to_expiry, self.risk_free_rate, put_iv_dec)
                     
-                    # VANNA and CHARM
                     call_vanna = self.bs_calc.calculate_vanna(spot_price, strike_price, time_to_expiry, self.risk_free_rate, call_iv_dec)
                     put_vanna = self.bs_calc.calculate_vanna(spot_price, strike_price, time_to_expiry, self.risk_free_rate, put_iv_dec)
                     call_charm = self.bs_calc.calculate_charm(spot_price, strike_price, time_to_expiry, self.risk_free_rate, call_iv_dec, 'call')
                     put_charm = self.bs_calc.calculate_charm(spot_price, strike_price, time_to_expiry, self.risk_free_rate, put_iv_dec, 'put')
                     
-                    # Calculate exposures (in crores)
                     call_gex = (call_oi * call_gamma * spot_price**2 * lot_size) / 1e7
                     put_gex = -(put_oi * put_gamma * spot_price**2 * lot_size) / 1e7
                     call_dex = (call_oi * call_delta * spot_price * lot_size) / 1e7
@@ -606,7 +546,7 @@ class DhanStockOptionsFetcher:
                         'net_charm': call_charm_exp + put_charm_exp,
                     })
                     
-                except Exception as e:
+                except:
                     continue
         
         progress_bar.empty()
@@ -616,8 +556,6 @@ class DhanStockOptionsFetcher:
             return None, None
         
         df = pd.DataFrame(all_data)
-        
-        # Sort by timestamp for flow calculations
         df = df.sort_values(['strike', 'timestamp']).reset_index(drop=True)
         
         # Calculate flows
@@ -640,11 +578,9 @@ class DhanStockOptionsFetcher:
                 df.loc[strike_mask, 'put_dex_flow'] = strike_data['put_dex'].diff().fillna(0)
                 df.loc[strike_mask, 'net_dex_flow'] = strike_data['net_dex'].diff().fillna(0)
         
-        # Calculate hedging pressure
         max_gex = df['net_gex'].abs().max()
         df['hedging_pressure'] = (df['net_gex'] / max_gex * 100) if max_gex > 0 else 0
         
-        # Get latest data point for metadata
         latest = df.sort_values('timestamp').iloc[-1]
         spot_prices = df['spot_price'].unique()
         spot_variation = (spot_prices.max() - spot_prices.min()) / spot_prices.mean() * 100
@@ -666,13 +602,143 @@ class DhanStockOptionsFetcher:
         }
         
         return df, meta
+    
+    def screen_single_stock(self, symbol: str, strikes: List[str] = None,
+                           expiry_code: int = 1, expiry_flag: str = "MONTH") -> Dict:
+        """Screen a single stock for gamma flip zones"""
+        if strikes is None:
+            strikes = ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2"]
+        
+        today = datetime.now()
+        from_date = (today - timedelta(days=1)).strftime('%Y-%m-%d')
+        to_date = today.strftime('%Y-%m-%d')
+        
+        config = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
+        lot_size = config["lot_size"]
+        
+        all_data = []
+        
+        for strike_type in strikes:
+            call_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "CALL", 
+                                                "60", expiry_code, expiry_flag)
+            time.sleep(0.5)
+            
+            put_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "PUT", 
+                                               "60", expiry_code, expiry_flag)
+            time.sleep(0.5)
+            
+            if not call_data or not put_data:
+                continue
+            
+            ce_data = call_data.get('ce', {})
+            pe_data = put_data.get('pe', {})
+            
+            if not ce_data:
+                continue
+            
+            try:
+                spot_price = ce_data.get('spot', [0])[-1] if ce_data.get('spot') else 0
+                strike_price = ce_data.get('strike', [0])[-1] if ce_data.get('strike') else 0
+                
+                if spot_price == 0 or strike_price == 0:
+                    continue
+                
+                call_oi = ce_data.get('oi', [0])[-1] if ce_data.get('oi') else 0
+                put_oi = pe_data.get('oi', [0])[-1] if pe_data.get('oi') else 0
+                call_iv = ce_data.get('iv', [15])[-1] if ce_data.get('iv') else 15
+                put_iv = pe_data.get('iv', [15])[-1] if pe_data.get('iv') else 15
+                
+                time_to_expiry = 30 / 365
+                call_iv_dec = call_iv / 100 if call_iv > 1 else call_iv
+                put_iv_dec = put_iv / 100 if put_iv > 1 else put_iv
+                
+                call_gamma = self.bs_calc.calculate_gamma(spot_price, strike_price, time_to_expiry, 
+                                                         self.risk_free_rate, call_iv_dec)
+                put_gamma = self.bs_calc.calculate_gamma(spot_price, strike_price, time_to_expiry, 
+                                                        self.risk_free_rate, put_iv_dec)
+                call_delta = self.bs_calc.calculate_call_delta(spot_price, strike_price, time_to_expiry, 
+                                                               self.risk_free_rate, call_iv_dec)
+                put_delta = self.bs_calc.calculate_put_delta(spot_price, strike_price, time_to_expiry, 
+                                                             self.risk_free_rate, put_iv_dec)
+                
+                call_gex = (call_oi * call_gamma * spot_price**2 * lot_size) / 1e7
+                put_gex = -(put_oi * put_gamma * spot_price**2 * lot_size) / 1e7
+                call_dex = (call_oi * call_delta * spot_price * lot_size) / 1e7
+                put_dex = (put_oi * put_delta * spot_price * lot_size) / 1e7
+                
+                all_data.append({
+                    'spot_price': spot_price,
+                    'strike': strike_price,
+                    'call_oi': call_oi,
+                    'put_oi': put_oi,
+                    'call_gex': call_gex,
+                    'put_gex': put_gex,
+                    'net_gex': call_gex + put_gex,
+                    'call_dex': call_dex,
+                    'put_dex': put_dex,
+                    'net_dex': call_dex + put_dex,
+                })
+            except:
+                continue
+        
+        if not all_data:
+            return {'success': False, 'symbol': symbol, 'error': 'No data available'}
+        
+        df = pd.DataFrame(all_data)
+        spot_price = df['spot_price'].iloc[0]
+        
+        flip_zones = identify_gamma_flip_zones(df, spot_price)
+        flip_analysis = analyze_flip_zone_position(spot_price, flip_zones)
+        
+        total_gex = df['net_gex'].sum()
+        total_dex = df['net_dex'].sum()
+        pcr = df['put_oi'].sum() / df['call_oi'].sum() if df['call_oi'].sum() > 0 else 1
+        
+        return {
+            'success': True,
+            'symbol': symbol,
+            'spot_price': spot_price,
+            'total_gex': total_gex,
+            'total_dex': total_dex,
+            'pcr': pcr,
+            'flip_zones': flip_zones,
+            'flip_analysis': flip_analysis,
+            'strikes_analyzed': len(df),
+            'timestamp': datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')
+        }
+    
+    def screen_multiple_stocks(self, symbols: List[str], strikes: List[str] = None,
+                               expiry_code: int = 1, expiry_flag: str = "MONTH") -> pd.DataFrame:
+        """Screen multiple stocks"""
+        results = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, symbol in enumerate(symbols):
+            status_text.text(f"Screening {symbol}... ({i+1}/{len(symbols)})")
+            
+            result = self.screen_single_stock(symbol, strikes, expiry_code, expiry_flag)
+            
+            if result['success']:
+                results.append(result)
+            
+            progress_bar.progress((i + 1) / len(symbols))
+            time.sleep(1)
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        if not results:
+            return pd.DataFrame()
+        
+        return pd.DataFrame(results)
 
 # ============================================================================
-# VISUALIZATION FUNCTIONS (Same as index dashboard but adapted for stocks)
+# VISUALIZATION FUNCTIONS (Keeping all existing charts)
 # ============================================================================
 
 def create_intraday_timeline(df: pd.DataFrame, selected_timestamp) -> go.Figure:
-    """Create intraday timeline of total GEX and DEX"""
+    """Create intraday timeline"""
     timeline_df = df.groupby('timestamp').agg({
         'net_gex': 'sum',
         'net_dex': 'sum',
@@ -688,49 +754,29 @@ def create_intraday_timeline(df: pd.DataFrame, selected_timestamp) -> go.Figure:
         row_heights=[0.35, 0.35, 0.3]
     )
     
-    # GEX timeline
     gex_colors = ['#10b981' if x > 0 else '#ef4444' for x in timeline_df['net_gex']]
     fig.add_trace(
-        go.Bar(
-            x=timeline_df['timestamp'],
-            y=timeline_df['net_gex'],
-            marker_color=gex_colors,
-            name='Net GEX',
-            hovertemplate='%{x|%H:%M}<br>GEX: %{y:.4f}Cr<extra></extra>'
-        ),
+        go.Bar(x=timeline_df['timestamp'], y=timeline_df['net_gex'], marker_color=gex_colors,
+               name='Net GEX', hovertemplate='%{x|%H:%M}<br>GEX: %{y:.4f}Cr<extra></extra>'),
         row=1, col=1
     )
     
-    # DEX timeline
     dex_colors = ['#10b981' if x > 0 else '#ef4444' for x in timeline_df['net_dex']]
     fig.add_trace(
-        go.Bar(
-            x=timeline_df['timestamp'],
-            y=timeline_df['net_dex'],
-            marker_color=dex_colors,
-            name='Net DEX',
-            hovertemplate='%{x|%H:%M}<br>DEX: %{y:.4f}Cr<extra></extra>'
-        ),
+        go.Bar(x=timeline_df['timestamp'], y=timeline_df['net_dex'], marker_color=dex_colors,
+               name='Net DEX', hovertemplate='%{x|%H:%M}<br>DEX: %{y:.4f}Cr<extra></extra>'),
         row=2, col=1
     )
     
-    # Spot price
     fig.add_trace(
-        go.Scatter(
-            x=timeline_df['timestamp'],
-            y=timeline_df['spot_price'],
-            mode='lines+markers',
-            line=dict(color='#3b82f6', width=2),
-            marker=dict(size=4),
-            name='Spot Price',
-            fill='tozeroy',
-            fillcolor='rgba(59, 130, 246, 0.1)',
-            hovertemplate='%{x|%H:%M}<br>Spot: ₹%{y:,.2f}<extra></extra>'
-        ),
+        go.Scatter(x=timeline_df['timestamp'], y=timeline_df['spot_price'],
+                  mode='lines+markers', line=dict(color='#3b82f6', width=2),
+                  marker=dict(size=4), name='Spot Price', fill='tozeroy',
+                  fillcolor='rgba(59, 130, 246, 0.1)',
+                  hovertemplate='%{x|%H:%M}<br>Spot: ₹%{y:,.2f}<extra></extra>'),
         row=3, col=1
     )
     
-    # Add vertical line at selected timestamp
     fig.add_vline(x=selected_timestamp, line_dash="dash", line_color="#f59e0b", line_width=3, row=1, col=1)
     fig.add_vline(x=selected_timestamp, line_dash="dash", line_color="#f59e0b", line_width=3, row=2, col=1)
     fig.add_vline(x=selected_timestamp, line_dash="dash", line_color="#f59e0b", line_width=3, row=3, col=1)
@@ -753,58 +799,36 @@ def create_intraday_timeline(df: pd.DataFrame, selected_timestamp) -> go.Figure:
     return fig
 
 def create_separate_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """GEX chart with Gamma Flip Zones"""
+    """GEX chart with flip zones"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex']]
-    
     flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
     
     fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex'],
-        orientation='h',
-        marker_color=colors,
-        name='Net GEX',
-        hovertemplate='Strike: %{y:,.0f}<br>Net GEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['net_gex'], orientation='h',
+                        marker_color=colors, name='Net GEX',
+                        hovertemplate='Strike: %{y:,.0f}<br>Net GEX: %{x:.4f}Cr<extra></extra>',
+                        showlegend=False))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
                   annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
                   annotation=dict(font=dict(size=12, color="white")))
     
-    # Add gamma flip zones
     for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
+        fig.add_hline(y=zone['strike'], line_dash="dot", line_color=zone['color'], line_width=2,
+                      annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
+                      annotation_position="left",
+                      annotation=dict(font=dict(size=10, color=zone['color']),
+                                    bgcolor='rgba(0,0,0,0.7)', bordercolor=zone['color'], borderwidth=1))
         
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
-        )
+        fig.add_hrect(y0=zone['lower_strike'], y1=zone['upper_strike'],
+                     fillcolor=zone['color'], opacity=0.1, line_width=0,
+                     annotation_text=zone['arrow'], annotation_position="right",
+                     annotation=dict(font=dict(size=16, color=zone['color'])))
     
     fig.update_layout(
-        title=dict(text="<b>🎯 Gamma Exposure (GEX) with Flip Zones</b>", font=dict(size=18, color='white')),
+        title=dict(text="<b>🎯 Gamma Exposure (GEX) with Flip Zones</b>",
+                  font=dict(size=18, color='white')),
         xaxis_title="GEX (₹ Crores)",
         yaxis_title="Strike Price",
         template="plotly_dark",
@@ -826,16 +850,10 @@ def create_separate_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
     colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_dex']]
     
     fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_dex'],
-        orientation='h',
-        marker_color=colors,
-        name='Net DEX',
-        hovertemplate='Strike: %{y:,.0f}<br>Net DEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['net_dex'], orientation='h',
+                        marker_color=colors, name='Net DEX',
+                        hovertemplate='Strike: %{y:,.0f}<br>Net DEX: %{x:.4f}Cr<extra></extra>',
+                        showlegend=False))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
                   annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
@@ -859,59 +877,37 @@ def create_separate_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
     return fig
 
 def create_net_gex_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """NET GEX+DEX chart with Flip Zones"""
+    """Combined NET GEX+DEX"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     df_sorted['net_gex_dex'] = df_sorted['net_gex'] + df_sorted['net_dex']
     colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex_dex']]
-    
     flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
     
     fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex_dex'],
-        orientation='h',
-        marker_color=colors,
-        name='Net GEX+DEX',
-        hovertemplate='Strike: %{y:,.0f}<br>Net GEX+DEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['net_gex_dex'], orientation='h',
+                        marker_color=colors, name='Net GEX+DEX',
+                        hovertemplate='Strike: %{y:,.0f}<br>Net GEX+DEX: %{x:.4f}Cr<extra></extra>',
+                        showlegend=False))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
                   annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
                   annotation=dict(font=dict(size=12, color="white")))
     
-    # Add gamma flip zones
     for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
+        fig.add_hline(y=zone['strike'], line_dash="dot", line_color=zone['color'], line_width=2,
+                      annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
+                      annotation_position="left",
+                      annotation=dict(font=dict(size=10, color=zone['color']),
+                                    bgcolor='rgba(0,0,0,0.7)', bordercolor=zone['color'], borderwidth=1))
         
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
-        )
+        fig.add_hrect(y0=zone['lower_strike'], y1=zone['upper_strike'],
+                     fillcolor=zone['color'], opacity=0.1, line_width=0,
+                     annotation_text=zone['arrow'], annotation_position="right",
+                     annotation=dict(font=dict(size=16, color=zone['color'])))
     
     fig.update_layout(
-        title=dict(text="<b>⚡ Combined NET GEX + DEX with Flip Zones</b>", font=dict(size=18, color='white')),
+        title=dict(text="<b>⚡ Combined NET GEX + DEX with Flip Zones</b>",
+                  font=dict(size=18, color='white')),
         xaxis_title="Combined Exposure (₹ Crores)",
         yaxis_title="Strike Price",
         template="plotly_dark",
@@ -928,34 +924,19 @@ def create_net_gex_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
     return fig
 
 def create_hedging_pressure_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Hedging pressure chart with Flip Zones"""
+    """Hedging pressure"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
     flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
     
     fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['hedging_pressure'],
-        orientation='h',
-        marker=dict(
-            color=df_sorted['hedging_pressure'],
-            colorscale='RdYlGn',
-            showscale=True,
-            colorbar=dict(
-                title=dict(text='Pressure %', font=dict(color='white', size=12)),
-                tickfont=dict(color='white'),
-                x=1.02,
-                len=0.7,
-                thickness=20
-            ),
-            cmin=-100,
-            cmax=100
-        ),
-        hovertemplate='Strike: %{y:,.0f}<br>Pressure: %{x:.1f}%<extra></extra>',
-        showlegend=False
-    ))
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['hedging_pressure'], orientation='h',
+                        marker=dict(color=df_sorted['hedging_pressure'], colorscale='RdYlGn',
+                                  showscale=True,
+                                  colorbar=dict(title=dict(text='Pressure %', font=dict(color='white', size=12)),
+                                              tickfont=dict(color='white'), x=1.02, len=0.7, thickness=20),
+                                  cmin=-100, cmax=100),
+                        hovertemplate='Strike: %{y:,.0f}<br>Pressure: %{x:.1f}%<extra></extra>',
+                        showlegend=False))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
                   annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
@@ -963,33 +944,17 @@ def create_hedging_pressure_chart(df: pd.DataFrame, spot_price: float) -> go.Fig
     
     fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
     
-    # Add gamma flip zones
     for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
+        fig.add_hline(y=zone['strike'], line_dash="dot", line_color=zone['color'], line_width=2,
+                      annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
+                      annotation_position="left",
+                      annotation=dict(font=dict(size=10, color=zone['color']),
+                                    bgcolor='rgba(0,0,0,0.7)', bordercolor=zone['color'], borderwidth=1))
         
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
-        )
+        fig.add_hrect(y0=zone['lower_strike'], y1=zone['upper_strike'],
+                     fillcolor=zone['color'], opacity=0.1, line_width=0,
+                     annotation_text=zone['arrow'], annotation_position="right",
+                     annotation=dict(font=dict(size=16, color=zone['color'])))
     
     fig.update_layout(
         title=dict(text="<b>🎪 Hedging Pressure with Flip Zones</b>", font=dict(size=18, color='white')),
@@ -1001,14 +966,9 @@ def create_hedging_pressure_chart(df: pd.DataFrame, spot_price: float) -> go.Fig
         height=700,
         showlegend=False,
         hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)', 
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(128,128,128,0.5)',
-            zerolinewidth=2,
-            range=[-110, 110]
-        ),
+        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True,
+                  zeroline=True, zerolinecolor='rgba(128,128,128,0.5)',
+                  zerolinewidth=2, range=[-110, 110]),
         yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
         margin=dict(l=80, r=120, t=80, b=80)
     )
@@ -1016,31 +976,18 @@ def create_hedging_pressure_chart(df: pd.DataFrame, spot_price: float) -> go.Fig
     return fig
 
 def create_oi_distribution(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """OI Distribution chart"""
+    """OI distribution"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     
     fig = go.Figure()
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['call_oi'], orientation='h',
+                        name='Call OI', marker_color='#10b981', opacity=0.7,
+                        hovertemplate='Strike: %{y:,.0f}<br>Call OI: %{x:,.0f}<extra></extra>'))
     
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['call_oi'],
-        orientation='h',
-        name='Call OI',
-        marker_color='#10b981',
-        opacity=0.7,
-        hovertemplate='Strike: %{y:,.0f}<br>Call OI: %{x:,.0f}<extra></extra>'
-    ))
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=-df_sorted['put_oi'],
-        orientation='h',
-        name='Put OI',
-        marker_color='#ef4444',
-        opacity=0.7,
-        hovertemplate='Strike: %{y:,.0f}<br>Put OI: %{customdata:,.0f}<extra></extra>',
-        customdata=df_sorted['put_oi']
-    ))
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=-df_sorted['put_oi'], orientation='h',
+                        name='Put OI', marker_color='#ef4444', opacity=0.7,
+                        hovertemplate='Strike: %{y:,.0f}<br>Put OI: %{customdata:,.0f}<extra></extra>',
+                        customdata=df_sorted['put_oi']))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
                   annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
@@ -1059,13 +1006,8 @@ def create_oi_distribution(df: pd.DataFrame, spot_price: float) -> go.Figure:
         barmode='overlay',
         legend=dict(orientation='h', yanchor='bottom', y=1.02, font=dict(color='white')),
         hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)', 
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(255,255,255,0.3)',
-            zerolinewidth=2
-        ),
+        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True,
+                  zeroline=True, zerolinecolor='rgba(255,255,255,0.3)', zerolinewidth=2),
         yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
         margin=dict(l=80, r=80, t=80, b=80)
     )
@@ -1073,35 +1015,24 @@ def create_oi_distribution(df: pd.DataFrame, spot_price: float) -> go.Figure:
     return fig
 
 def create_vanna_exposure_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """VANNA Exposure chart"""
+    """VANNA exposure"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     
     colors_call = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['call_vanna']]
     colors_put = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['put_vanna']]
     
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("📈 Call VANNA", "📉 Put VANNA"),
-        horizontal_spacing=0.12
-    )
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("📈 Call VANNA", "📉 Put VANNA"),
+                       horizontal_spacing=0.12)
     
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['call_vanna'],
-        orientation='h',
-        marker=dict(color=colors_call),
-        name='Call VANNA',
-        hovertemplate='Strike: %{y:,.0f}<br>Call VANNA: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=1)
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['call_vanna'], orientation='h',
+                        marker=dict(color=colors_call), name='Call VANNA',
+                        hovertemplate='Strike: %{y:,.0f}<br>Call VANNA: %{x:.4f}Cr<extra></extra>'),
+                 row=1, col=1)
     
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['put_vanna'],
-        orientation='h',
-        marker=dict(color=colors_put),
-        name='Put VANNA',
-        hovertemplate='Strike: %{y:,.0f}<br>Put VANNA: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=2)
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['put_vanna'], orientation='h',
+                        marker=dict(color=colors_put), name='Put VANNA',
+                        hovertemplate='Strike: %{y:,.0f}<br>Put VANNA: %{x:.4f}Cr<extra></extra>'),
+                 row=1, col=2)
     
     for col in [1, 2]:
         fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
@@ -1125,35 +1056,24 @@ def create_vanna_exposure_chart(df: pd.DataFrame, spot_price: float) -> go.Figur
     return fig
 
 def create_charm_exposure_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """CHARM Exposure chart"""
+    """CHARM exposure"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     
     colors_call = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['call_charm']]
     colors_put = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['put_charm']]
     
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("📈 Call CHARM", "📉 Put CHARM"),
-        horizontal_spacing=0.12
-    )
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("📈 Call CHARM", "📉 Put CHARM"),
+                       horizontal_spacing=0.12)
     
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['call_charm'],
-        orientation='h',
-        marker=dict(color=colors_call),
-        name='Call CHARM',
-        hovertemplate='Strike: %{y:,.0f}<br>Call CHARM: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=1)
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['call_charm'], orientation='h',
+                        marker=dict(color=colors_call), name='Call CHARM',
+                        hovertemplate='Strike: %{y:,.0f}<br>Call CHARM: %{x:.4f}Cr<extra></extra>'),
+                 row=1, col=1)
     
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['put_charm'],
-        orientation='h',
-        marker=dict(color=colors_put),
-        name='Put CHARM',
-        hovertemplate='Strike: %{y:,.0f}<br>Put CHARM: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=2)
+    fig.add_trace(go.Bar(y=df_sorted['strike'], x=df_sorted['put_charm'], orientation='h',
+                        marker=dict(color=colors_put), name='Put CHARM',
+                        hovertemplate='Strike: %{y:,.0f}<br>Put CHARM: %{x:.4f}Cr<extra></extra>'),
+                 row=1, col=2)
     
     for col in [1, 2]:
         fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
@@ -1177,494 +1097,631 @@ def create_charm_exposure_chart(df: pd.DataFrame, spot_price: float) -> go.Figur
     return fig
 
 # ============================================================================
-# MAIN APPLICATION
+# SCREENER DISPLAY FUNCTIONS
+# ============================================================================
+
+def display_screener_results(df_results: pd.DataFrame, filter_type: str):
+    """Display screener results"""
+    if len(df_results) == 0:
+        st.warning("No stocks match the screening criteria")
+        return
+    
+    st.success(f"✅ Found {len(df_results)} stocks matching criteria")
+    
+    for idx, row in df_results.iterrows():
+        flip_analysis = row['flip_analysis']
+        
+        if filter_type == 'above':
+            card_class = 'bullish'
+            signal_badge = 'long'
+            signal_text = '🟢 LONG OPPORTUNITY'
+        else:
+            card_class = 'bearish'
+            signal_badge = 'short'
+            signal_text = '🔴 SHORT OPPORTUNITY'
+        
+        if flip_analysis['has_flip_zones'] and flip_analysis['nearest_flip']:
+            nearest = flip_analysis['nearest_flip']
+            flip_info = f"Flip @ ₹{nearest['strike']:,.2f} ({nearest['distance_pct']:.2f}% away) {nearest['arrow']}"
+        else:
+            flip_info = "No flip zones"
+        
+        st.markdown(f"""
+        <div class="screener-card {card_class}">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h3 style="margin: 0; color: var(--text-primary); font-size: 1.5rem;">{row['symbol']}</h3>
+                    <p style="margin: 5px 0; color: var(--text-secondary);">Spot: ₹{row['spot_price']:,.2f}</p>
+                </div>
+                <div class="opportunity-badge {signal_badge}">{signal_text}</div>
+            </div>
+            <div style="margin-top: 15px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">NET GEX</p>
+                    <p style="margin: 5px 0; color: {'var(--accent-green)' if row['total_gex'] > 0 else 'var(--accent-red)'}; font-weight: 600;">
+                        {row['total_gex']:.4f}Cr
+                    </p>
+                </div>
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">NET DEX</p>
+                    <p style="margin: 5px 0; color: {'var(--accent-green)' if row['total_dex'] > 0 else 'var(--accent-red)'}; font-weight: 600;">
+                        {row['total_dex']:.4f}Cr
+                    </p>
+                </div>
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">PUT/CALL RATIO</p>
+                    <p style="margin: 5px 0; color: var(--text-primary); font-weight: 600;">{row['pcr']:.2f}</p>
+                </div>
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">FLIP ZONES</p>
+                    <p style="margin: 5px 0; color: var(--accent-yellow); font-weight: 600;">
+                        {flip_analysis['flip_count'] if flip_analysis['has_flip_zones'] else 0}
+                    </p>
+                </div>
+            </div>
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem;">
+                    🔄 {flip_info}
+                </p>
+                <p style="margin: 5px 0 0 0; color: var(--text-muted); font-size: 0.75rem;">
+                    {row['timestamp']} | {row['strikes_analyzed']} strikes analyzed
+                </p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+def create_screener_summary_chart(df_results: pd.DataFrame) -> go.Figure:
+    """Summary chart for screener"""
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_results['symbol'],
+        x=df_results['total_gex'],
+        orientation='h',
+        name='NET GEX',
+        marker_color=['#10b981' if x > 0 else '#ef4444' for x in df_results['total_gex']],
+        hovertemplate='%{y}<br>GEX: %{x:.4f}Cr<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title="<b>NET GEX Comparison</b>",
+        xaxis_title="NET GEX (₹ Crores)",
+        yaxis_title="Stock",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=max(400, len(df_results) * 50),
+        showlegend=False
+    )
+    
+    return fig
+
+# ============================================================================
+# MAIN APPLICATION - UNIFIED
 # ============================================================================
 
 def main():
     # Header
     st.markdown("""
     <div class="main-header">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <h1 class="main-title">📈 NYZTrade Stock Options GEX/DEX Dashboard</h1>
-                <p class="sub-title">Historical Stock Options Greeks | Weekly/Monthly | VANNA & CHARM | Gamma Flip Zones | IST</p>
-            </div>
-            <div class="history-indicator">
-                <div class="history-dot"></div>
-                <span style="color: #3b82f6; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;">STOCK OPTIONS</span>
-            </div>
-        </div>
+        <h1 style="margin: 0; font-size: 2.5rem; background: linear-gradient(135deg, #3b82f6, #8b5cf6); 
+                   -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+            🎯 NYZTrade Stock Options | Unified Dashboard
+        </h1>
+        <p style="margin: 5px 0 0 0; color: var(--text-secondary); font-size: 0.9rem;">
+            Full Analysis + Multi-Stock Screener | VANNA & CHARM | Gamma Flip Zones | All-in-One
+        </p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar configuration
+    # Sidebar
     with st.sidebar:
-        st.markdown("### ⚙️ Configuration")
+        st.markdown("### 🎯 Mode Selection")
         
-        # Stock selection with categories
-        st.markdown("#### 📊 Select Stock")
-        
-        stock_categories = {
-            "Banking & Finance": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "BAJFINANCE", "BAJAJFINSV"],
-            "IT & Technology": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
-            "Energy & Power": ["RELIANCE", "ONGC", "POWERGRID", "NTPC", "COALINDIA"],
-            "Auto & Industrial": ["MARUTI", "TATAMOTORS", "M&M", "LT"],
-            "FMCG & Consumer": ["HINDUNILVR", "ITC", "ASIANPAINT", "TITAN"],
-            "Pharma & Chemicals": ["SUNPHARMA"],
-            "Metals & Mining": ["TATASTEEL"],
-            "Telecom & Infra": ["BHARTIARTL", "ADANIPORTS"]
-        }
-        
-        category = st.selectbox("Select Category", list(stock_categories.keys()))
-        symbol = st.selectbox("Select Stock", stock_categories[category])
-        
-        # Display stock info
-        stock_info = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
-        st.info(f"📦 Lot Size: {stock_info['lot_size']}\n\n⚡ Strike Interval: ₹{stock_info['strike_interval']}")
-        
-        st.markdown("---")
-        st.markdown("### 📅 Historical Date Selection")
-        
-        date_range_option = st.selectbox(
-            "Select Date Range",
-            ["Last 30 Days", "Last 60 Days", "Last 90 Days", "Custom Range"],
+        app_mode = st.radio(
+            "Choose Mode",
+            ["📊 Single Stock Analysis", "🔍 Multi-Stock Screener"],
             index=0
         )
         
-        if date_range_option == "Custom Range":
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input(
-                    "Start Date",
-                    value=datetime.now() - timedelta(days=30),
-                    max_value=datetime.now(),
-                    min_value=datetime.now() - timedelta(days=90)
-                )
-            with col2:
-                end_date = st.date_input(
-                    "End Date",
-                    value=datetime.now(),
-                    max_value=datetime.now(),
-                    min_value=start_date
-                )
+        st.markdown("---")
+        
+        if app_mode == "📊 Single Stock Analysis":
+            st.markdown("#### Stock Selection")
             
-            date_list = pd.date_range(start=start_date, end=end_date, freq='D')
-            date_list = [d for d in date_list if d.weekday() < 5]
+            category = st.selectbox("Category", [
+                "Banking & Finance", "IT & Technology", "Energy & Power",
+                "Auto & Industrial", "FMCG & Consumer", "Others"
+            ])
             
+            category_stocks = {
+                "Banking & Finance": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "BAJFINANCE", "BAJAJFINSV"],
+                "IT & Technology": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
+                "Energy & Power": ["RELIANCE", "ONGC", "POWERGRID", "NTPC", "COALINDIA"],
+                "Auto & Industrial": ["MARUTI", "TATAMOTORS", "M&M", "LT"],
+                "FMCG & Consumer": ["HINDUNILVR", "ITC", "ASIANPAINT", "TITAN"],
+                "Others": ["SUNPHARMA", "TATASTEEL", "BHARTIARTL", "ADANIPORTS"]
+            }
+            
+            symbol = st.selectbox("Stock", category_stocks[category])
+            
+            stock_info = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
+            st.info(f"📦 Lot: {stock_info['lot_size']}\n⚡ Interval: ₹{stock_info['strike_interval']}")
+            
+            st.markdown("---")
+            st.markdown("#### Date Selection")
+            
+            date_range_option = st.selectbox("Range", ["Last 30 Days", "Last 60 Days", "Last 90 Days", "Custom"], index=0)
+            
+            if date_range_option == "Custom":
+                col1, col2 = st.columns(2)
+                with col1:
+                    start_date = st.date_input("Start", value=datetime.now() - timedelta(days=30),
+                                               max_value=datetime.now(), min_value=datetime.now() - timedelta(days=90))
+                with col2:
+                    end_date = st.date_input("End", value=datetime.now(),
+                                             max_value=datetime.now(), min_value=start_date)
+                date_list = pd.date_range(start=start_date, end=end_date, freq='D')
+                date_list = [d for d in date_list if d.weekday() < 5]
+            else:
+                days_back = {"Last 30 Days": 30, "Last 60 Days": 60, "Last 90 Days": 90}[date_range_option]
+                date_list = pd.date_range(end=datetime.now(), periods=days_back, freq='D')
+                date_list = [d for d in date_list if d.weekday() < 5]
+            
+            available_dates = [d.date() for d in date_list]
+            
+            if len(available_dates) > 0:
+                st.caption(f"📊 {len(available_dates)} trading days")
+            
+            selected_date = st.selectbox("Trading Day", options=available_dates,
+                                        index=len(available_dates)-1 if len(available_dates) > 0 else 0,
+                                        format_func=lambda x: x.strftime('%Y-%m-%d (%A)'))
+            
+            target_date = selected_date.strftime('%Y-%m-%d')
+            
+            st.markdown("---")
+            st.markdown("#### Analysis Settings")
+            
+            expiry_type = st.selectbox("Expiry", ["Monthly", "Weekly"], index=0)
+            expiry_flag = "MONTH" if expiry_type == "Monthly" else "WEEK"
+            expiry_code = st.selectbox("Expiry Code", [1, 2, 3], index=0,
+                                      format_func=lambda x: {1: "Current", 2: "Next", 3: "Far"}[x])
+            
+            strikes = st.multiselect("Strikes",
+                ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3",
+                 "ATM+4", "ATM-4", "ATM+5", "ATM-5"],
+                default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3"])
+            
+            interval = st.selectbox("Interval", options=["1", "5", "15", "60"],
+                                   format_func=lambda x: {"1": "1 min", "5": "5 min", "15": "15 min", "60": "1 hour"}[x],
+                                   index=2)
+            
+            st.info(f"📊 {len(strikes)} strikes | {interval} min")
+            
+            st.markdown("---")
+            
+            fetch_button = st.button("🚀 Fetch Data", use_container_width=True, type="primary")
+        
         else:
-            days_back = {"Last 30 Days": 30, "Last 60 Days": 60, "Last 90 Days": 90}[date_range_option]
-            date_list = pd.date_range(end=datetime.now(), periods=days_back, freq='D')
-            date_list = [d for d in date_list if d.weekday() < 5]
-        
-        available_dates = [d.date() for d in date_list]
-        
-        if len(available_dates) > 0:
-            st.caption(f"📊 {len(available_dates)} trading days available")
-        
-        selected_date = st.selectbox(
-            "Select Trading Day",
-            options=available_dates,
-            index=len(available_dates)-1 if len(available_dates) > 0 else 0,
-            format_func=lambda x: x.strftime('%Y-%m-%d (%A)')
-        )
-        
-        target_date = selected_date.strftime('%Y-%m-%d')
-        
-        st.markdown("---")
-        st.markdown("### 📆 Expiry Selection")
-        
-        expiry_type = st.selectbox("Expiry Type", ["Monthly", "Weekly"], index=0)
-        expiry_flag = "MONTH" if expiry_type == "Monthly" else "WEEK"
-        
-        expiry_option = st.selectbox(
-            "Select Expiry",
-            ["Current (Nearest)", "Next", "Far"],
-            index=0
-        )
-        
-        expiry_code = {"Current (Nearest)": 1, "Next": 2, "Far": 3}[expiry_option]
-        
-        st.info(f"📌 {expiry_type} | {expiry_option}")
-        
-        st.markdown("---")
-        st.markdown("### 🎯 Strike Selection")
-        
-        strikes = st.multiselect(
-            "Select Strikes",
-            ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3", 
-             "ATM+4", "ATM-4", "ATM+5", "ATM-5", "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8", 
-             "ATM+9", "ATM-9", "ATM+10", "ATM-10"],
-            default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3", 
-             "ATM+4", "ATM-4", "ATM+5", "ATM-5", "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8", 
-             "ATM+9", "ATM-9", "ATM+10", "ATM-10"]
-        )
+            st.markdown("#### Stock Selection")
+            
+            preset = st.selectbox("Quick Preset",
+                ["Custom", "Banking Stocks", "IT Stocks", "High Volume Stocks", "All Stocks (30)"],
+                index=0)
+            
+            if preset == "Custom":
+                selected_stocks = st.multiselect("Select Stocks",
+                    options=sorted(list(DHAN_STOCK_SECURITY_IDS.keys())),
+                    default=["RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK"])
+            elif preset == "Banking Stocks":
+                selected_stocks = ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK"]
+            elif preset == "IT Stocks":
+                selected_stocks = ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"]
+            elif preset == "High Volume Stocks":
+                selected_stocks = ["RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK",
+                                  "SBIN", "BHARTIARTL", "ITC", "LT", "AXISBANK"]
+            else:
+                selected_stocks = sorted(list(DHAN_STOCK_SECURITY_IDS.keys()))
+            
+            st.info(f"📊 {len(selected_stocks)} stocks selected")
+            
+            st.markdown("---")
+            st.markdown("#### Screener Filter")
+            
+            filter_type = st.radio("Filter Type",
+                ["🟢 Spot Above Gamma Flip", "🔴 Spot Below Gamma Flip", "🔵 All Stocks with Flip Zones"],
+                index=0)
+            
+            st.markdown("---")
+            st.markdown("#### Settings")
+            
+            expiry_type = st.selectbox("Expiry", ["Monthly", "Weekly"], index=0)
+            expiry_flag = "MONTH" if expiry_type == "Monthly" else "WEEK"
+            expiry_code = st.selectbox("Expiry Code", [1, 2, 3], index=0,
+                                      format_func=lambda x: {1: "Current", 2: "Next", 3: "Far"}[x])
+            
+            strikes_count = st.slider("Strikes per Stock", 3, 7, 5)
+            strike_list = ["ATM"] + [f"ATM+{i}" for i in range(1, strikes_count)] + [f"ATM-{i}" for i in range(1, strikes_count)]
+            
+            st.markdown("---")
+            
+            run_screener = st.button("🚀 Run Screener", use_container_width=True, type="primary")
         
         st.markdown("---")
-        st.markdown("### ⏱️ Time Interval")
-        
-        interval = st.selectbox(
-            "Select Interval",
-            options=["1", "5", "15", "60"],
-            format_func=lambda x: {"1": "1 minute", "5": "5 minutes", "15": "15 minutes", "60": "1 hour"}[x],
-            index=2  # Default to 15 minutes
-        )
-        
-        st.info(f"📊 {len(strikes)} strikes | {interval} min")
-        
-        st.markdown("---")
-        
-        fetch_button = st.button("🚀 Fetch Stock Options Data", use_container_width=True, type="primary")
-        
-        st.markdown("---")
-        st.markdown("### 🕐 Indian Standard Time")
+        st.markdown("### 🕐 IST")
         ist_now = datetime.now(IST)
-        st.info(f"IST: {ist_now.strftime('%H:%M:%S')}")
-    
-    # Store configuration
-    if fetch_button:
-        st.session_state.fetch_config = {
-            'symbol': symbol,
-            'target_date': target_date,
-            'strikes': strikes,
-            'interval': interval,
-            'expiry_code': expiry_code,
-            'expiry_flag': expiry_flag
-        }
-        st.session_state.data_fetched = False
+        st.info(f"{ist_now.strftime('%H:%M:%S')}")
     
     # Main content
-    if fetch_button or (hasattr(st.session_state, 'fetch_config') and st.session_state.get('data_fetched', False)):
-        if hasattr(st.session_state, 'fetch_config'):
-            config = st.session_state.fetch_config
-            symbol = config['symbol']
-            target_date = config['target_date']
-            strikes = config['strikes']
-            interval = config['interval']
-            expiry_code = config.get('expiry_code', 1)
-            expiry_flag = config.get('expiry_flag', 'MONTH')
+    if app_mode == "📊 Single Stock Analysis":
+        # Store config
+        if fetch_button:
+            st.session_state.fetch_config = {
+                'symbol': symbol,
+                'target_date': target_date,
+                'strikes': strikes,
+                'interval': interval,
+                'expiry_code': expiry_code,
+                'expiry_flag': expiry_flag
+            }
+            st.session_state.data_fetched = False
         
-        if not strikes:
-            st.error("❌ Please select at least one strike")
-            return
-        
-        if not st.session_state.get('data_fetched', False) or 'df_data' not in st.session_state:
-            st.markdown(f"""
-            <div class="metric-card neutral" style="margin: 20px 0;">
-                <div class="metric-label">Fetching Stock Options Data</div>
-                <div class="metric-value" style="color: #3b82f6; font-size: 1.2rem;">
-                    {symbol} | {target_date} | {interval} min | {expiry_flag} {expiry_code}
-                </div>
-                <div class="metric-delta">This may take 1-3 minutes...</div>
-            </div>
-            """, unsafe_allow_html=True)
+        # Main analysis (reuse all existing code from original dashboard)
+        if fetch_button or (hasattr(st.session_state, 'fetch_config') and st.session_state.get('data_fetched', False)):
+            if hasattr(st.session_state, 'fetch_config'):
+                config = st.session_state.fetch_config
+                symbol = config['symbol']
+                target_date = config['target_date']
+                strikes = config['strikes']
+                interval = config['interval']
+                expiry_code = config.get('expiry_code', 1)
+                expiry_flag = config.get('expiry_flag', 'MONTH')
             
-            try:
-                fetcher = DhanStockOptionsFetcher(DhanConfig())
-                df, meta = fetcher.process_historical_data(symbol, target_date, strikes, interval, expiry_code, expiry_flag)
-                
-                if df is None or len(df) == 0:
-                    st.error("❌ No data available. Please check if it was a trading day or try different settings.")
-                    return
-                
-                st.session_state.df_data = df
-                st.session_state.meta_data = meta
-                st.session_state.data_fetched = True
-                st.rerun()
-            
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+            if not strikes:
+                st.error("❌ Please select at least one strike")
                 return
-        
-        # Retrieve from session state
-        df = st.session_state.df_data
-        meta = st.session_state.meta_data
-        
-        all_timestamps = sorted(df['timestamp'].unique())
-        
-        st.success(f"✅ Data fetched | {len(df):,} records | Lot Size: {meta['lot_size']}")
-        
-        st.markdown("---")
-        st.markdown("### ⏱️ Time Navigation")
-        
-        # Time controls (same as index dashboard)
-        control_cols = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
-        
-        with control_cols[0]:
-            if st.button("⏮️ First", use_container_width=True):
-                st.session_state.timestamp_idx = 0
-        
-        with control_cols[1]:
-            if st.button("◀️ Prev", use_container_width=True):
-                current = st.session_state.get('timestamp_idx', len(all_timestamps) - 1)
-                st.session_state.timestamp_idx = max(0, current - 1)
-        
-        with control_cols[2]:
-            if st.button("🔄 Reset", use_container_width=True):
-                st.session_state.timestamp_idx = len(all_timestamps) - 1
-        
-        with control_cols[3]:
-            if st.button("▶️ Next", use_container_width=True):
-                current = st.session_state.get('timestamp_idx', len(all_timestamps) - 1)
-                st.session_state.timestamp_idx = min(len(all_timestamps) - 1, current + 1)
-        
-        with control_cols[4]:
-            if st.button("⏭️ Last", use_container_width=True):
-                st.session_state.timestamp_idx = len(all_timestamps) - 1
-        
-        with control_cols[5]:
-            if st.button("⏰ 9:30", use_container_width=True):
-                morning_times = [i for i, ts in enumerate(all_timestamps) if ts.hour == 9 and ts.minute >= 30]
-                if morning_times:
-                    st.session_state.timestamp_idx = morning_times[0]
-        
-        with control_cols[6]:
-            if st.button("⏰ 12:00", use_container_width=True):
-                noon_times = [i for i, ts in enumerate(all_timestamps) if ts.hour == 12]
-                if noon_times:
-                    st.session_state.timestamp_idx = noon_times[0]
-        
-        with control_cols[7]:
-            if st.button("⏰ 3:15", use_container_width=True):
-                close_times = [i for i, ts in enumerate(all_timestamps) if ts.hour == 15 and ts.minute >= 15]
-                if close_times:
-                    st.session_state.timestamp_idx = close_times[0]
-        
-        col1, col2, col3 = st.columns([1, 3, 1])
-        
-        with col1:
-            st.markdown(f"""<div class="metric-card neutral" style="padding: 15px;">
-                <div class="metric-label">Start</div>
-                <div class="metric-value" style="font-size: 1.2rem;">{all_timestamps[0].strftime('%H:%M')}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        with col2:
-            if 'timestamp_idx' not in st.session_state:
-                st.session_state.timestamp_idx = len(all_timestamps) - 1
             
-            selected_timestamp_idx = st.slider(
-                "🎯 Navigate through time",
-                min_value=0,
-                max_value=len(all_timestamps) - 1,
-                value=st.session_state.timestamp_idx,
-                format="",
-                key="time_slider"
-            )
+            if not st.session_state.get('data_fetched', False) or 'df_data' not in st.session_state:
+                st.markdown(f"""
+                <div class="metric-card neutral" style="margin: 20px 0;">
+                    <div style="color: #3b82f6; font-size: 1.2rem; font-weight: 600;">
+                        Fetching {symbol} | {target_date} | {interval} min
+                    </div>
+                    <div style="margin-top: 10px; color: var(--text-secondary);">Please wait 1-3 minutes...</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                try:
+                    fetcher = DhanStockOptionsFetcher(DhanConfig())
+                    df, meta = fetcher.process_historical_data(symbol, target_date, strikes, interval, expiry_code, expiry_flag)
+                    
+                    if df is None or len(df) == 0:
+                        st.error("❌ No data available")
+                        return
+                    
+                    st.session_state.df_data = df
+                    st.session_state.meta_data = meta
+                    st.session_state.data_fetched = True
+                    st.rerun()
+                
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+                    return
             
-            st.session_state.timestamp_idx = selected_timestamp_idx
-            selected_timestamp = all_timestamps[selected_timestamp_idx]
+            # [Continue with ALL the existing dashboard visualization code]
+            # This includes time navigation, metrics display, and all 9 tabs
+            # (Keeping all the existing code from the original dashboard)
             
-            progress = (selected_timestamp_idx + 1) / len(all_timestamps)
-            st.progress(progress)
+            df = st.session_state.df_data
+            meta = st.session_state.meta_data
             
-            st.info(f"📍 **{selected_timestamp.strftime('%H:%M:%S IST')}** | Point {selected_timestamp_idx + 1} of {len(all_timestamps)}")
-        
-        with col3:
-            st.markdown(f"""<div class="metric-card neutral" style="padding: 15px;">
-                <div class="metric-label">End</div>
-                <div class="metric-value" style="font-size: 1.2rem;">{all_timestamps[-1].strftime('%H:%M')}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        # Filter data
-        df_selected = df[df['timestamp'] == selected_timestamp].copy()
-        
-        if len(df_selected) == 0:
-            closest_idx = min(range(len(all_timestamps)), 
-                             key=lambda i: abs((all_timestamps[i] - selected_timestamp).total_seconds()))
-            df_selected = df[df['timestamp'] == all_timestamps[closest_idx]].copy()
-        
-        df_latest = df_selected
-        spot_price = df_latest['spot_price'].iloc[0] if len(df_latest) > 0 else 0
-        
-        # Calculate metrics
-        total_gex = df_latest['net_gex'].sum()
-        total_dex = df_latest['net_dex'].sum()
-        total_net = total_gex + total_dex
-        total_call_oi = df_latest['call_oi'].sum()
-        total_put_oi = df_latest['put_oi'].sum()
-        pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 1
-        
-        flip_zones = identify_gamma_flip_zones(df_latest, spot_price)
-        
-        # Display metrics
-        st.markdown("### 📊 Stock Options Overview")
-        
-        if len(flip_zones) > 0:
-            flip_info = " | ".join([f"🔄 {z['strike']:,.0f} {z['arrow']}" for z in flip_zones[:3]])
-            st.info(f"🎯 **Gamma Flip Zones**: {flip_info}")
-        
-        cols = st.columns(6)
-        
-        with cols[0]:
-            st.markdown(f"""<div class="metric-card neutral">
-                <div class="metric-label">Stock & Date</div>
-                <div class="metric-value" style="font-size: 1.2rem;">{symbol}</div>
-                <div class="metric-delta">{target_date}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        with cols[1]:
-            st.markdown(f"""<div class="metric-card neutral">
-                <div class="metric-label">Spot Price</div>
-                <div class="metric-value">₹{spot_price:,.2f}</div>
-                <div class="metric-delta">{selected_timestamp.strftime('%H:%M IST')}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        with cols[2]:
-            gex_class = "positive" if total_gex > 0 else "negative"
-            st.markdown(f"""<div class="metric-card {gex_class}">
-                <div class="metric-label">Total NET GEX</div>
-                <div class="metric-value {gex_class}">{total_gex:.4f}Cr</div>
-                <div class="metric-delta">{'Suppression' if total_gex > 0 else 'Amplification'}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        with cols[3]:
-            dex_class = "positive" if total_dex > 0 else "negative"
-            st.markdown(f"""<div class="metric-card {dex_class}">
-                <div class="metric-label">Total NET DEX</div>
-                <div class="metric-value {dex_class}">{total_dex:.4f}Cr</div>
-                <div class="metric-delta">{'Bullish' if total_dex > 0 else 'Bearish'}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        with cols[4]:
-            net_class = "positive" if total_net > 0 else "negative"
-            st.markdown(f"""<div class="metric-card {net_class}">
-                <div class="metric-label">GEX + DEX</div>
-                <div class="metric-value {net_class}">{total_net:.4f}Cr</div>
-                <div class="metric-delta">Combined</div>
-            </div>""", unsafe_allow_html=True)
-        
-        with cols[5]:
-            pcr_class = "positive" if pcr > 1 else "negative"
-            st.markdown(f"""<div class="metric-card {pcr_class}">
-                <div class="metric-label">Put/Call Ratio</div>
-                <div class="metric-value {pcr_class}">{pcr:.2f}</div>
-                <div class="metric-delta">{'Bearish' if pcr > 1.2 else 'Bullish' if pcr < 0.8 else 'Neutral'}</div>
-            </div>""", unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        # Signal badges
-        cols = st.columns(5)
-        with cols[0]:
-            gex_signal = "🟢 GEX SUPPRESSION" if total_gex > 0 else "🔴 GEX AMPLIFICATION"
-            gex_badge = "bullish" if total_gex > 0 else "bearish"
-            st.markdown(f'<div class="signal-badge {gex_badge}">{gex_signal}</div>', unsafe_allow_html=True)
-        
-        with cols[1]:
-            dex_signal = "🟢 DEX BULLISH" if total_dex > 0 else "🔴 DEX BEARISH"
-            dex_badge = "bullish" if total_dex > 0 else "bearish"
-            st.markdown(f'<div class="signal-badge {dex_badge}">{dex_signal}</div>', unsafe_allow_html=True)
-        
-        with cols[2]:
-            net_signal = "🟢 NET POSITIVE" if total_net > 0 else "🔴 NET NEGATIVE"
-            net_badge = "bullish" if total_net > 0 else "bearish"
-            st.markdown(f'<div class="signal-badge {net_badge}">{net_signal}</div>', unsafe_allow_html=True)
-        
-        with cols[3]:
-            st.markdown(f'<div class="signal-badge volatile">📊 {len(df_latest)} Strikes</div>', unsafe_allow_html=True)
-        
-        with cols[4]:
+            all_timestamps = sorted(df['timestamp'].unique())
+            
+            st.success(f"✅ Data fetched | {len(df):,} records")
+            
+            st.markdown("---")
+            st.markdown("### ⏱️ Time Navigation")
+            
+            control_cols = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
+            
+            with control_cols[0]:
+                if st.button("⏮️ First", use_container_width=True):
+                    st.session_state.timestamp_idx = 0
+            with control_cols[1]:
+                if st.button("◀️ Prev", use_container_width=True):
+                    current = st.session_state.get('timestamp_idx', len(all_timestamps) - 1)
+                    st.session_state.timestamp_idx = max(0, current - 1)
+            with control_cols[2]:
+                if st.button("🔄 Reset", use_container_width=True):
+                    st.session_state.timestamp_idx = len(all_timestamps) - 1
+            with control_cols[3]:
+                if st.button("▶️ Next", use_container_width=True):
+                    current = st.session_state.get('timestamp_idx', len(all_timestamps) - 1)
+                    st.session_state.timestamp_idx = min(len(all_timestamps) - 1, current + 1)
+            with control_cols[4]:
+                if st.button("⏭️ Last", use_container_width=True):
+                    st.session_state.timestamp_idx = len(all_timestamps) - 1
+            with control_cols[5]:
+                if st.button("⏰ 9:30", use_container_width=True):
+                    morning_times = [i for i, ts in enumerate(all_timestamps) if ts.hour == 9 and ts.minute >= 30]
+                    if morning_times:
+                        st.session_state.timestamp_idx = morning_times[0]
+            with control_cols[6]:
+                if st.button("⏰ 12:00", use_container_width=True):
+                    noon_times = [i for i, ts in enumerate(all_timestamps) if ts.hour == 12]
+                    if noon_times:
+                        st.session_state.timestamp_idx = noon_times[0]
+            with control_cols[7]:
+                if st.button("⏰ 3:15", use_container_width=True):
+                    close_times = [i for i, ts in enumerate(all_timestamps) if ts.hour == 15 and ts.minute >= 15]
+                    if close_times:
+                        st.session_state.timestamp_idx = close_times[0]
+            
+            col1, col2, col3 = st.columns([1, 3, 1])
+            
+            with col1:
+                st.markdown(f"""<div class="metric-card neutral" style="padding: 15px;">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Start</div>
+                    <div style="color: var(--text-primary); font-size: 1.2rem; font-weight: 600;">{all_timestamps[0].strftime('%H:%M')}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            with col2:
+                if 'timestamp_idx' not in st.session_state:
+                    st.session_state.timestamp_idx = len(all_timestamps) - 1
+                
+                selected_timestamp_idx = st.slider("🎯 Navigate", min_value=0, max_value=len(all_timestamps) - 1,
+                                                   value=st.session_state.timestamp_idx, format="", key="time_slider")
+                
+                st.session_state.timestamp_idx = selected_timestamp_idx
+                selected_timestamp = all_timestamps[selected_timestamp_idx]
+                
+                progress = (selected_timestamp_idx + 1) / len(all_timestamps)
+                st.progress(progress)
+                
+                st.info(f"📍 **{selected_timestamp.strftime('%H:%M:%S IST')}** | Point {selected_timestamp_idx + 1} of {len(all_timestamps)}")
+            
+            with col3:
+                st.markdown(f"""<div class="metric-card neutral" style="padding: 15px;">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">End</div>
+                    <div style="color: var(--text-primary); font-size: 1.2rem; font-weight: 600;">{all_timestamps[-1].strftime('%H:%M')}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            df_selected = df[df['timestamp'] == selected_timestamp].copy()
+            
+            if len(df_selected) == 0:
+                closest_idx = min(range(len(all_timestamps)),
+                                 key=lambda i: abs((all_timestamps[i] - selected_timestamp).total_seconds()))
+                df_selected = df[df['timestamp'] == all_timestamps[closest_idx]].copy()
+            
+            df_latest = df_selected
+            spot_price = df_latest['spot_price'].iloc[0] if len(df_latest) > 0 else 0
+            
+            total_gex = df_latest['net_gex'].sum()
+            total_dex = df_latest['net_dex'].sum()
+            total_net = total_gex + total_dex
+            total_call_oi = df_latest['call_oi'].sum()
+            total_put_oi = df_latest['put_oi'].sum()
+            pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 1
+            
+            flip_zones = identify_gamma_flip_zones(df_latest, spot_price)
+            
+            st.markdown("### 📊 Overview")
+            
             if len(flip_zones) > 0:
-                st.markdown(f'<div class="signal-badge volatile">🔄 {len(flip_zones)} Flip Zones</div>', unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Tabs for visualizations
-        tabs = st.tabs(["🎯 GEX", "📊 DEX", "⚡ NET", "🎪 Hedge", 
-                        "🌊 VANNA", "⏰ CHARM",
-                        "📈 Timeline", "📋 Data"])
-        
-        with tabs[0]:
-            st.markdown("### 🎯 Gamma Exposure with Flip Zones")
-            st.plotly_chart(create_separate_gex_chart(df_latest, spot_price), use_container_width=True)
-        
-        with tabs[1]:
-            st.markdown("### 📊 Delta Exposure")
-            st.plotly_chart(create_separate_dex_chart(df_latest, spot_price), use_container_width=True)
-        
-        with tabs[2]:
-            st.markdown("### ⚡ Combined NET GEX + DEX")
-            st.plotly_chart(create_net_gex_dex_chart(df_latest, spot_price), use_container_width=True)
-        
-        with tabs[3]:
-            st.markdown("### 🎪 Hedging Pressure")
-            st.plotly_chart(create_hedging_pressure_chart(df_latest, spot_price), use_container_width=True)
-        
-        with tabs[4]:
-            st.markdown("### 🌊 VANNA Exposure")
-            st.plotly_chart(create_vanna_exposure_chart(df_latest, spot_price), use_container_width=True)
+                flip_info = " | ".join([f"🔄 {z['strike']:,.0f} {z['arrow']}" for z in flip_zones[:3]])
+                st.info(f"**Gamma Flip Zones**: {flip_info}")
             
-            st.markdown("""
-            **VANNA**: Delta sensitivity to volatility changes
-            - Critical for hedging in volatile markets
-            - Positive VANNA: Delta increases with volatility
+            cols = st.columns(6)
+            
+            with cols[0]:
+                st.markdown(f"""<div class="metric-card neutral">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Stock & Date</div>
+                    <div style="color: var(--text-primary); font-size: 1.2rem; font-weight: 600;">{symbol}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 5px;">{target_date}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            with cols[1]:
+                st.markdown(f"""<div class="metric-card neutral">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Spot Price</div>
+                    <div style="color: var(--text-primary); font-size: 1.5rem; font-weight: 700;">₹{spot_price:,.2f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 5px;">{selected_timestamp.strftime('%H:%M IST')}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            with cols[2]:
+                gex_class = "positive" if total_gex > 0 else "negative"
+                st.markdown(f"""<div class="metric-card {gex_class}">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Total NET GEX</div>
+                    <div style="color: {'var(--accent-green)' if total_gex > 0 else 'var(--accent-red)'}; font-size: 1.5rem; font-weight: 700;">{total_gex:.4f}Cr</div>
+                    <div style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 5px;">{'Suppression' if total_gex > 0 else 'Amplification'}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            with cols[3]:
+                dex_class = "positive" if total_dex > 0 else "negative"
+                st.markdown(f"""<div class="metric-card {dex_class}">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Total NET DEX</div>
+                    <div style="color: {'var(--accent-green)' if total_dex > 0 else 'var(--accent-red)'}; font-size: 1.5rem; font-weight: 700;">{total_dex:.4f}Cr</div>
+                    <div style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 5px;">{'Bullish' if total_dex > 0 else 'Bearish'}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            with cols[4]:
+                net_class = "positive" if total_net > 0 else "negative"
+                st.markdown(f"""<div class="metric-card {net_class}">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">GEX + DEX</div>
+                    <div style="color: {'var(--accent-green)' if total_net > 0 else 'var(--accent-red)'}; font-size: 1.5rem; font-weight: 700;">{total_net:.4f}Cr</div>
+                    <div style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 5px;">Combined</div>
+                </div>""", unsafe_allow_html=True)
+            
+            with cols[5]:
+                pcr_class = "positive" if pcr > 1 else "negative"
+                st.markdown(f"""<div class="metric-card {pcr_class}">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Put/Call Ratio</div>
+                    <div style="color: {'var(--accent-green)' if pcr > 1 else 'var(--accent-red)'}; font-size: 1.5rem; font-weight: 700;">{pcr:.2f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 5px;">{'Bearish' if pcr > 1.2 else 'Bullish' if pcr < 0.8 else 'Neutral'}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            cols = st.columns(5)
+            with cols[0]:
+                gex_signal = "🟢 GEX SUPPRESSION" if total_gex > 0 else "🔴 GEX AMPLIFICATION"
+                gex_badge = "bullish" if total_gex > 0 else "bearish"
+                st.markdown(f'<div class="signal-badge {gex_badge}">{gex_signal}</div>', unsafe_allow_html=True)
+            with cols[1]:
+                dex_signal = "🟢 DEX BULLISH" if total_dex > 0 else "🔴 DEX BEARISH"
+                dex_badge = "bullish" if total_dex > 0 else "bearish"
+                st.markdown(f'<div class="signal-badge {dex_badge}">{dex_signal}</div>', unsafe_allow_html=True)
+            with cols[2]:
+                net_signal = "🟢 NET POSITIVE" if total_net > 0 else "🔴 NET NEGATIVE"
+                net_badge = "bullish" if total_net > 0 else "bearish"
+                st.markdown(f'<div class="signal-badge {net_badge}">{net_signal}</div>', unsafe_allow_html=True)
+            with cols[3]:
+                st.markdown(f'<div class="signal-badge volatile">📊 {len(df_latest)} Strikes</div>', unsafe_allow_html=True)
+            with cols[4]:
+                if len(flip_zones) > 0:
+                    st.markdown(f'<div class="signal-badge volatile">🔄 {len(flip_zones)} Flip Zones</div>', unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            tabs = st.tabs(["🎯 GEX", "📊 DEX", "⚡ NET", "🎪 Hedge",
+                           "🌊 VANNA", "⏰ CHARM", "📈 Timeline", "📋 Data"])
+            
+            with tabs[0]:
+                st.markdown("### 🎯 Gamma Exposure")
+                st.plotly_chart(create_separate_gex_chart(df_latest, spot_price), use_container_width=True)
+            
+            with tabs[1]:
+                st.markdown("### 📊 Delta Exposure")
+                st.plotly_chart(create_separate_dex_chart(df_latest, spot_price), use_container_width=True)
+            
+            with tabs[2]:
+                st.markdown("### ⚡ Combined NET GEX + DEX")
+                st.plotly_chart(create_net_gex_dex_chart(df_latest, spot_price), use_container_width=True)
+            
+            with tabs[3]:
+                st.markdown("### 🎪 Hedging Pressure")
+                st.plotly_chart(create_hedging_pressure_chart(df_latest, spot_price), use_container_width=True)
+            
+            with tabs[4]:
+                st.markdown("### 🌊 VANNA Exposure")
+                st.plotly_chart(create_vanna_exposure_chart(df_latest, spot_price), use_container_width=True)
+                st.markdown("**VANNA**: Delta sensitivity to volatility")
+            
+            with tabs[5]:
+                st.markdown("### ⏰ CHARM Exposure")
+                st.plotly_chart(create_charm_exposure_chart(df_latest, spot_price), use_container_width=True)
+                st.markdown("**CHARM**: Delta decay over time")
+            
+            with tabs[6]:
+                st.markdown("### 📈 Intraday Evolution")
+                st.plotly_chart(create_intraday_timeline(df, selected_timestamp), use_container_width=True)
+            
+            with tabs[7]:
+                st.markdown("### 📋 Open Interest")
+                st.plotly_chart(create_oi_distribution(df_latest, spot_price), use_container_width=True)
+                
+                st.markdown("### 📊 Data Table")
+                display_df = df_latest[['strike', 'call_oi', 'put_oi', 'net_gex', 'net_dex']].copy()
+                display_df['net_gex'] = display_df['net_gex'].apply(lambda x: f"{x:.4f}Cr")
+                display_df['net_dex'] = display_df['net_dex'].apply(lambda x: f"{x:.4f}Cr")
+                
+                st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
+                
+                csv = df.to_csv(index=False)
+                st.download_button("📥 Download CSV", data=csv,
+                                  file_name=f"{symbol}_GEX_DEX_{target_date}.csv", mime="text/csv")
+        
+        else:
+            st.info("""
+            👋 **Welcome to Single Stock Analysis!**
+            
+            Select a stock, configure settings, and click "Fetch Data" to begin deep analysis.
+            
+            **Features:**
+            - 🎯 GEX/DEX/VANNA/CHARM Greeks
+            - 🔄 Gamma Flip Zone Detection
+            - 📈 Intraday Timeline Navigation
+            - ⏱️ 1-min to 1-hour intervals
             """)
-        
-        with tabs[5]:
-            st.markdown("### ⏰ CHARM Exposure")
-            st.plotly_chart(create_charm_exposure_chart(df_latest, spot_price), use_container_width=True)
-            
-            st.markdown("""
-            **CHARM**: Delta decay over time
-            - Shows time decay effects on delta
-            - Important near expiration
-            """)
-        
-        with tabs[6]:
-            st.markdown("### 📈 Intraday Evolution")
-            st.plotly_chart(create_intraday_timeline(df, selected_timestamp), use_container_width=True)
-        
-        with tabs[7]:
-            st.markdown("### 📋 Open Interest")
-            st.plotly_chart(create_oi_distribution(df_latest, spot_price), use_container_width=True)
-            
-            st.markdown("### 📊 Data Table")
-            display_df = df_latest[['strike', 'call_oi', 'put_oi', 'net_gex', 'net_dex']].copy()
-            display_df['net_gex'] = display_df['net_gex'].apply(lambda x: f"{x:.4f}Cr")
-            display_df['net_dex'] = display_df['net_dex'].apply(lambda x: f"{x:.4f}Cr")
-            
-            st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
-            
-            csv = df.to_csv(index=False)
-            st.download_button(
-                "📥 Download CSV",
-                data=csv,
-                file_name=f"{symbol}_GEX_DEX_{target_date}.csv",
-                mime="text/csv"
-            )
     
     else:
-        st.info("""
-        👋 **Welcome to NYZTrade Stock Options Dashboard!**
+        # Screener mode
+        if run_screener:
+            if not selected_stocks:
+                st.error("Please select at least one stock")
+                return
+            
+            st.markdown("### 🔍 Running Screener...")
+            
+            screener = DhanStockOptionsFetcher(DhanConfig())
+            df_results = screener.screen_multiple_stocks(selected_stocks, strike_list, expiry_code, expiry_flag)
+            
+            if len(df_results) == 0:
+                st.error("No data available")
+                return
+            
+            if filter_type == "🟢 Spot Above Gamma Flip":
+                filtered_df = df_results[
+                    df_results['flip_analysis'].apply(
+                        lambda x: x['has_flip_zones'] and x['position'] in ['above_all', 'between']
+                    )
+                ]
+                filter_key = 'above'
+            elif filter_type == "🔴 Spot Below Gamma Flip":
+                filtered_df = df_results[
+                    df_results['flip_analysis'].apply(
+                        lambda x: x['has_flip_zones'] and x['position'] in ['below_all', 'between']
+                    )
+                ]
+                filter_key = 'below'
+            else:
+                filtered_df = df_results[df_results['flip_analysis'].apply(lambda x: x['has_flip_zones'])]
+                filter_key = 'all'
+            
+            st.session_state.screener_results = filtered_df
+            st.session_state.filter_type = filter_key
+            
+            st.markdown("---")
+            
+            if len(filtered_df) > 0:
+                st.markdown("### 📊 Screener Results")
+                display_screener_results(filtered_df, filter_key)
+                
+                st.markdown("---")
+                st.markdown("### 📈 Visual Comparison")
+                st.plotly_chart(create_screener_summary_chart(filtered_df), use_container_width=True)
+                
+                st.markdown("---")
+                export_data = filtered_df[['symbol', 'spot_price', 'total_gex', 'total_dex', 'pcr', 'timestamp']].copy()
+                export_data['flip_zones_count'] = filtered_df['flip_analysis'].apply(lambda x: x['flip_count'] if x['has_flip_zones'] else 0)
+                
+                csv = export_data.to_csv(index=False)
+                st.download_button("📥 Download Results (CSV)", data=csv,
+                                  file_name=f"screener_results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                  mime="text/csv")
+            else:
+                st.warning("No stocks match the selected filter criteria")
         
-        **Features:**
-        - 📈 30 Popular Stock Options
-        - 🌊 VANNA & CHARM Greeks
-        - 🔄 Gamma Flip Zones
-        - ⏱️ 1-min to 1-hour intervals
-        - 📊 Historical data up to 90 days
-        
-        **How to use:**
-        1. Select stock category and symbol
-        2. Choose date and expiry
-        3. Select strikes (ATM ±5)
-        4. Pick interval
-        5. Click "Fetch Data"
-        6. Navigate through time
-        
-        **Available Stocks:**
-        - Banking: HDFCBANK, ICICIBANK, SBIN, etc.
-        - IT: TCS, INFY, WIPRO, etc.
-        - Others: RELIANCE, MARUTI, LT, etc.
-        
-        ⚠️ Educational purposes only
-        """)
+        else:
+            st.info("""
+            👋 **Welcome to Multi-Stock Screener!**
+            
+            **How to use:**
+            1. Select stocks (presets or custom)
+            2. Choose filter (Above/Below/All flip zones)
+            3. Configure settings
+            4. Click "Run Screener"
+            
+            **Filters:**
+            - 🟢 **Above Flip**: Bullish continuation setups
+            - 🔴 **Below Flip**: Bearish continuation setups
+            - 🔵 **All Flip Zones**: All stocks with detected flip zones
+            """)
     
-    # Footer
     st.markdown("---")
     st.markdown(f"""<div style="text-align: center; padding: 20px;">
         <p style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #64748b;">
-        NYZTrade Stock Options GEX/DEX Dashboard | Powered by Dhan API<br>
-        VANNA & CHARM | Gamma Flip Zones | 30 Stocks Available</p>
+        NYZTrade Stock Options | Unified Dashboard<br>
+        Single Stock Analysis + Multi-Stock Screener | All-in-One</p>
         <p style="font-size: 0.75rem;">⚠️ For educational purposes only</p>
     </div>""", unsafe_allow_html=True)
 
