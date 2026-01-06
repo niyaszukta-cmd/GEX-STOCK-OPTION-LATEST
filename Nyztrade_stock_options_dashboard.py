@@ -1292,8 +1292,11 @@ def main():
         strikes = st.multiselect(
             "Select Strikes",
             ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3", 
-             "ATM+4", "ATM-4", "ATM+5", "ATM-5"],
-            default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3"]
+             "ATM+4", "ATM-4", "ATM+5", "ATM-5", "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8", 
+             "ATM+9", "ATM-9", "ATM+10", "ATM-10"],
+            default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3", 
+             "ATM+4", "ATM-4", "ATM+5", "ATM-5", "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8", 
+             "ATM+9", "ATM-9", "ATM+10", "ATM-10"]
         )
         
         st.markdown("---")
