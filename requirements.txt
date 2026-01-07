@@ -5,3 +5,4 @@ plotly
 scipy
 requests
 pytz
+gunicorn
