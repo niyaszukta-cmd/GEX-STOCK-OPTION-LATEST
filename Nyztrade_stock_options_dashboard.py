@@ -183,7 +183,7 @@ st.markdown("""
 @dataclass
 class DhanConfig:
     client_id: str = "1100480354"
-    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODkzMDI4LCJhcHBfaWQiOiJlZDMwMzI5NCIsImlhdCI6MTc2NzgwNjYyOCwidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.OvP_-naB_4O_qga01ouG4O9bHGJUoZV3WhVsOkCjRhN8zlCxckVwMEHoKayRyCFMtayHliU8_mH62f7rb3KDcw"
+    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3OTgwMzg1LCJhcHBfaWQiOiJlZDMwMzI5NCIsImlhdCI6MTc2Nzg5Mzk4NSwidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.7M7pbTIGcShLApqITPCMOqsD9WynmCf1f3NjGkiu5yKMpeHLEHNLFgnL1Ip-ueuE37WMi2qxQ-cCV82W4w7QGA"
 DHAN_STOCK_SECURITY_IDS = {
     "RELIANCE": 2885, "TCS": 11536, "HDFCBANK": 1333, "INFY": 1594,
     "ICICIBANK": 4963, "SBIN": 3045, "BHARTIARTL": 1195, "ITC": 1660,
