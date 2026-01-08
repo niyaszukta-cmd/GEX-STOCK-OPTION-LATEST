@@ -531,6 +531,8 @@ class DhanStockOptionsFetcher:
                         'total_volume': call_volume + put_volume,
                         'call_iv': call_iv,
                         'put_iv': put_iv,
+                        'call_gamma': call_gamma,
+                        'put_gamma': put_gamma,
                         'call_gex': call_gex,
                         'put_gex': put_gex,
                         'net_gex': call_gex + put_gex,
@@ -584,6 +586,16 @@ class DhanStockOptionsFetcher:
         spot_prices = df['spot_price'].unique()
         spot_variation = (spot_prices.max() - spot_prices.min()) / spot_prices.mean() * 100
         
+        # Find high volume strikes from latest timestamp data
+        df_latest_time = df[df['timestamp'] == df['timestamp'].max()]
+        strike_volumes = df_latest_time.groupby('strike').agg({
+            'call_volume': 'sum',
+            'put_volume': 'sum',
+            'total_volume': 'sum'
+        }).reset_index()
+        strike_volumes = strike_volumes.sort_values('total_volume', ascending=False)
+        top_volume_strikes = strike_volumes.head(5).to_dict('records')
+        
         meta = {
             'symbol': symbol,
             'date': target_date,
@@ -597,7 +609,8 @@ class DhanStockOptionsFetcher:
             'interval': f"{interval} minutes" if interval != "1" else "1 minute",
             'expiry_code': expiry_code,
             'expiry_flag': expiry_flag,
-            'lot_size': lot_size
+            'lot_size': lot_size,
+            'top_volume_strikes': top_volume_strikes
         }
         
         return df, meta
@@ -616,6 +629,7 @@ class DhanStockOptionsFetcher:
         lot_size = config["lot_size"]
         
         all_data = []
+        strike_volumes = []  # Track individual strike volumes
         
         for strike_type in strikes:
             call_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "CALL", 
@@ -667,6 +681,17 @@ class DhanStockOptionsFetcher:
                 call_dex = (call_oi * call_delta * spot_price * lot_size) / 1e7
                 put_dex = (put_oi * put_delta * spot_price * lot_size) / 1e7
                 
+                # Track strike volumes
+                strike_volumes.append({
+                    'strike': strike_price,
+                    'call_volume': call_volume,
+                    'put_volume': put_volume,
+                    'total_volume': call_volume + put_volume,
+                    'call_gamma_abs': call_gamma * call_oi,  # Absolute gamma
+                    'put_gamma_abs': put_gamma * put_oi,
+                    'moneyness': 'OTM_CALL' if strike_price > spot_price else ('OTM_PUT' if strike_price < spot_price else 'ATM')
+                })
+                
                 all_data.append({
                     'spot_price': spot_price,
                     'strike': strike_price,
@@ -674,6 +699,8 @@ class DhanStockOptionsFetcher:
                     'put_oi': put_oi,
                     'call_volume': call_volume,
                     'put_volume': put_volume,
+                    'call_gamma': call_gamma,
+                    'put_gamma': put_gamma,
                     'call_gex': call_gex,
                     'put_gex': put_gex,
                     'net_gex': call_gex + put_gex,
@@ -701,6 +728,26 @@ class DhanStockOptionsFetcher:
         total_volume = total_call_volume + total_put_volume
         volume_pcr = total_put_volume / total_call_volume if total_call_volume > 0 else 1
         
+        # Find high volume strikes
+        if strike_volumes:
+            strike_df = pd.DataFrame(strike_volumes)
+            top_volume_strikes = strike_df.nlargest(3, 'total_volume')[['strike', 'total_volume']].to_dict('records')
+            
+            # Calculate gamma differential (OTM calls vs OTM puts)
+            otm_calls = strike_df[strike_df['moneyness'] == 'OTM_CALL']
+            otm_puts = strike_df[strike_df['moneyness'] == 'OTM_PUT']
+            
+            total_otm_call_gamma = otm_calls['call_gamma_abs'].sum() if len(otm_calls) > 0 else 0
+            total_otm_put_gamma = otm_puts['put_gamma_abs'].sum() if len(otm_puts) > 0 else 0
+            gamma_differential = total_otm_call_gamma - total_otm_put_gamma
+            
+            # Normalize by spot for comparison across stocks
+            gamma_diff_normalized = gamma_differential / spot_price if spot_price > 0 else 0
+        else:
+            top_volume_strikes = []
+            gamma_differential = 0
+            gamma_diff_normalized = 0
+        
         return {
             'success': True,
             'symbol': symbol,
@@ -712,6 +759,9 @@ class DhanStockOptionsFetcher:
             'call_volume': total_call_volume,
             'put_volume': total_put_volume,
             'volume_pcr': volume_pcr,
+            'top_volume_strikes': top_volume_strikes,
+            'gamma_differential': gamma_differential,
+            'gamma_diff_normalized': gamma_diff_normalized,
             'flip_zones': flip_zones,
             'flip_analysis': flip_analysis,
             'strikes_analyzed': len(df),
@@ -1123,11 +1173,11 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
         flip_analysis = row['flip_analysis']
         
         # Determine card styling based on filter type
-        if filter_type in ['above', 'positive_gex']:
+        if filter_type in ['above', 'positive_gex', 'positive_gamma_diff']:
             card_class = 'bullish'
             signal_badge = 'long'
             signal_text = '🟢 LONG OPPORTUNITY'
-        elif filter_type in ['below', 'negative_gex']:
+        elif filter_type in ['below', 'negative_gex', 'negative_gamma_diff']:
             card_class = 'bearish'
             signal_badge = 'short'
             signal_text = '🔴 SHORT OPPORTUNITY'
@@ -1155,6 +1205,26 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
         call_volume = row.get('call_volume', 0)
         put_volume = row.get('put_volume', 0)
         volume_pcr = row.get('volume_pcr', 1)
+        
+        # Get high volume strikes
+        top_strikes = row.get('top_volume_strikes', [])
+        if top_strikes and len(top_strikes) > 0:
+            strikes_display = " | ".join([f"₹{s['strike']:,.0f} ({s['total_volume']:,.0f})" for s in top_strikes[:3]])
+            high_vol_strikes_html = f"""
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">📍 HIGH VOLUME STRIKES</p>
+                <p style="margin: 5px 0; color: var(--accent-cyan); font-weight: 600; font-size: 0.9rem;">
+                    {strikes_display}
+                </p>
+            </div>
+            """
+        else:
+            high_vol_strikes_html = ""
+        
+        # Get gamma differential
+        gamma_diff = row.get('gamma_differential', 0)
+        gamma_diff_color = 'var(--accent-green)' if gamma_diff > 0 else 'var(--accent-red)'
+        gamma_diff_label = 'OTM Call γ > Put γ' if gamma_diff > 0 else 'OTM Put γ > Call γ'
         
         st.markdown(f"""
         <div class="screener-card {card_class}">
@@ -1207,10 +1277,21 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
                     <p style="margin: 5px 0; color: var(--text-primary); font-weight: 600;">{volume_pcr:.2f}</p>
                 </div>
             </div>
+            {high_vol_strikes_html}
             <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem;">
-                    🔄 {flip_info}
-                </p>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                        <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</p>
+                        <p style="margin: 5px 0; color: {gamma_diff_color}; font-weight: 600; font-size: 0.85rem;">
+                            {gamma_diff:.4f} ({gamma_diff_label})
+                        </p>
+                    </div>
+                    <div>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem;">
+                            🔄 {flip_info}
+                        </p>
+                    </div>
+                </div>
                 <p style="margin: 5px 0 0 0; color: var(--text-muted); font-size: 0.75rem;">
                     {row['timestamp']} | {row['strikes_analyzed']} strikes analyzed
                 </p>
@@ -1302,6 +1383,38 @@ def create_total_volume_chart(df_results: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         title="<b>Total Options Volume</b>",
         xaxis_title="Total Volume",
+        yaxis_title="Stock",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=max(400, len(df_sorted) * 50),
+        showlegend=False
+    )
+    
+    return fig
+
+def create_gamma_differential_chart(df_results: pd.DataFrame) -> go.Figure:
+    """Gamma differential comparison chart"""
+    df_sorted = df_results.sort_values('gamma_diff_normalized', ascending=True)
+    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['gamma_diff_normalized']]
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['symbol'],
+        x=df_sorted['gamma_diff_normalized'],
+        orientation='h',
+        name='Gamma Differential',
+        marker_color=colors,
+        hovertemplate='%{y}<br>γ Diff: %{x:.6f}<br>%{customdata}<extra></extra>',
+        customdata=[f"OTM Call γ {'>' if x > 0 else '<'} OTM Put γ" for x in df_sorted['gamma_diff_normalized']]
+    ))
+    
+    fig.add_vline(x=0, line_dash="dot", line_color="white", line_width=2)
+    
+    fig.update_layout(
+        title="<b>⚡ Gamma Differential (OTM Calls vs OTM Puts)</b>",
+        xaxis_title="Normalized Gamma Differential (γ_calls - γ_puts) / Spot",
         yaxis_title="Stock",
         template="plotly_dark",
         paper_bgcolor='rgba(0,0,0,0)',
@@ -1452,7 +1565,9 @@ def main():
                  "❌ NET GEX Negative",
                  "📊 High Volume (Top 10)",
                  "📈 High Call Volume",
-                 "📉 High Put Volume"],
+                 "📉 High Put Volume",
+                 "⚡ Positive Gamma Differential",
+                 "⚡ Negative Gamma Differential"],
                 index=0)
             
             st.markdown("---")
@@ -1628,6 +1743,88 @@ def main():
             
             flip_zones = identify_gamma_flip_zones(df_latest, spot_price)
             
+            # Quick Summary Banner
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%); 
+                        border: 2px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+                <h3 style="margin: 0 0 15px 0; color: var(--accent-cyan);">🎯 Quick Analysis Summary</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            quick_cols = st.columns(3)
+            
+            with quick_cols[0]:
+                # Top 3 high volume strikes
+                if meta.get('top_volume_strikes'):
+                    top_3 = meta['top_volume_strikes'][:3]
+                    strikes_str = " → ".join([f"₹{s['strike']:,.0f}" for s in top_3])
+                    st.markdown(f"""
+                    <div class="metric-card neutral" style="background: rgba(6, 182, 212, 0.1);">
+                        <div style="color: var(--text-muted); font-size: 0.8rem;">📍 TOP VOLUME STRIKES</div>
+                        <div style="color: var(--accent-cyan); font-size: 1.1rem; font-weight: 700; margin: 8px 0;">
+                            {strikes_str}
+                        </div>
+                        <div style="color: var(--text-secondary); font-size: 0.75rem;">
+                            Key price levels where action is happening
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            with quick_cols[1]:
+                # Gamma differential quick view
+                otm_calls_quick = df_latest[df_latest['strike'] > spot_price]
+                otm_puts_quick = df_latest[df_latest['strike'] < spot_price]
+                call_gamma_quick = (otm_calls_quick['call_oi'] * otm_calls_quick['call_gamma']).sum() if len(otm_calls_quick) > 0 else 0
+                put_gamma_quick = (otm_puts_quick['put_oi'] * otm_puts_quick['put_gamma']).sum() if len(otm_puts_quick) > 0 else 0
+                gamma_diff_quick = call_gamma_quick - put_gamma_quick
+                
+                gamma_color_quick = "var(--accent-green)" if gamma_diff_quick > 0 else "var(--accent-red)"
+                gamma_signal_quick = "OTM Call γ Dominance" if gamma_diff_quick > 0 else "OTM Put γ Dominance"
+                gamma_arrow = "↑" if gamma_diff_quick > 0 else "↓"
+                
+                st.markdown(f"""
+                <div class="metric-card {'positive' if gamma_diff_quick > 0 else 'negative'}">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</div>
+                    <div style="color: {gamma_color_quick}; font-size: 1.3rem; font-weight: 700; margin: 8px 0;">
+                        {gamma_diff_quick:,.2f} {gamma_arrow}
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem;">
+                        {gamma_signal_quick}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with quick_cols[2]:
+                # Trading recommendation
+                if gamma_diff_quick > 0 and total_gex < 0:
+                    setup_text = "🚀 BULLISH SQUEEZE SETUP"
+                    setup_color = "var(--accent-green)"
+                    setup_desc = "Positive γ diff + Negative GEX = Amplified upside"
+                elif gamma_diff_quick < 0 and total_gex < 0:
+                    setup_text = "💥 BEARISH PRESSURE SETUP"
+                    setup_color = "var(--accent-red)"
+                    setup_desc = "Negative γ diff + Negative GEX = Amplified downside"
+                elif total_gex > 0:
+                    setup_text = "📊 RANGE-BOUND SETUP"
+                    setup_color = "var(--accent-yellow)"
+                    setup_desc = "Positive GEX = Suppression expected"
+                else:
+                    setup_text = "⚖️ BALANCED SETUP"
+                    setup_color = "var(--accent-cyan)"
+                    setup_desc = "Mixed signals, watch for direction"
+                
+                st.markdown(f"""
+                <div class="metric-card neutral" style="border-left: 4px solid {setup_color};">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">🎯 MARKET SETUP</div>
+                    <div style="color: {setup_color}; font-size: 1.1rem; font-weight: 700; margin: 8px 0;">
+                        {setup_text}
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem;">
+                        {setup_desc}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
             st.markdown("### 📊 Overview")
             
             if len(flip_zones) > 0:
@@ -1684,6 +1881,129 @@ def main():
             
             st.markdown("<br>", unsafe_allow_html=True)
             
+            # High Volume Strikes Display
+            if meta.get('top_volume_strikes'):
+                st.markdown("### 📍 High Volume Strikes")
+                top_strikes = meta['top_volume_strikes'][:5]
+                
+                strike_cols = st.columns(min(5, len(top_strikes)))
+                for idx, strike_data in enumerate(top_strikes):
+                    with strike_cols[idx]:
+                        strike_price = strike_data['strike']
+                        strike_vol = strike_data['total_volume']
+                        call_vol = strike_data['call_volume']
+                        put_vol = strike_data['put_volume']
+                        
+                        # Determine if OTM call, OTM put, or ATM
+                        if abs(strike_price - spot_price) < (spot_price * 0.01):
+                            strike_type = "ATM"
+                            color = "var(--accent-yellow)"
+                        elif strike_price > spot_price:
+                            strike_type = "OTM Call"
+                            color = "var(--accent-green)"
+                        else:
+                            strike_type = "OTM Put"
+                            color = "var(--accent-red)"
+                        
+                        st.markdown(f"""
+                        <div class="metric-card neutral" style="border-left: 4px solid {color};">
+                            <div style="color: var(--text-muted); font-size: 0.75rem;">{strike_type}</div>
+                            <div style="color: {color}; font-size: 1.3rem; font-weight: 700;">₹{strike_price:,.0f}</div>
+                            <div style="color: var(--text-primary); font-size: 0.9rem; margin-top: 5px; font-weight: 600;">{strike_vol:,.0f} vol</div>
+                            <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">
+                                C: {call_vol:,.0f} | P: {put_vol:,.0f}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                st.caption("💡 **High volume strikes often act as support/resistance levels**")
+            
+            # Gamma Differential Analysis
+            st.markdown("### ⚡ Gamma Differential Analysis")
+            
+            # Calculate gamma differential for current view
+            df_current = df_latest.copy()
+            otm_calls = df_current[df_current['strike'] > spot_price]
+            otm_puts = df_current[df_current['strike'] < spot_price]
+            
+            total_otm_call_gamma = (otm_calls['call_oi'] * otm_calls['call_gamma']).sum() if len(otm_calls) > 0 else 0
+            total_otm_put_gamma = (otm_puts['put_oi'] * otm_puts['put_gamma']).sum() if len(otm_puts) > 0 else 0
+            gamma_differential = total_otm_call_gamma - total_otm_put_gamma
+            gamma_diff_normalized = gamma_differential / spot_price if spot_price > 0 else 0
+            
+            gamma_cols = st.columns(4)
+            
+            with gamma_cols[0]:
+                st.markdown(f"""
+                <div class="metric-card neutral" style="border-left: 4px solid var(--accent-green);">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">OTM Call Gamma</div>
+                    <div style="color: var(--accent-green); font-size: 1.2rem; font-weight: 700;">{total_otm_call_gamma:,.2f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Absolute Γ</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with gamma_cols[1]:
+                st.markdown(f"""
+                <div class="metric-card neutral" style="border-left: 4px solid var(--accent-red);">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">OTM Put Gamma</div>
+                    <div style="color: var(--accent-red); font-size: 1.2rem; font-weight: 700;">{total_otm_put_gamma:,.2f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Absolute Γ</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with gamma_cols[2]:
+                gamma_diff_color = "var(--accent-green)" if gamma_differential > 0 else "var(--accent-red)"
+                gamma_diff_signal = "Bullish Pressure" if gamma_differential > 0 else "Bearish Pressure"
+                st.markdown(f"""
+                <div class="metric-card {'positive' if gamma_differential > 0 else 'negative'}">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Gamma Differential</div>
+                    <div style="color: {gamma_diff_color}; font-size: 1.2rem; font-weight: 700;">{gamma_differential:,.2f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">{gamma_diff_signal}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with gamma_cols[3]:
+                # Magnitude indicator
+                abs_diff = abs(gamma_diff_normalized)
+                if abs_diff > 0.003:
+                    magnitude = "VERY HIGH"
+                    mag_color = "var(--accent-yellow)"
+                elif abs_diff > 0.001:
+                    magnitude = "MODERATE"
+                    mag_color = "var(--accent-cyan)"
+                else:
+                    magnitude = "LOW"
+                    mag_color = "var(--text-muted)"
+                
+                st.markdown(f"""
+                <div class="metric-card neutral" style="border-left: 4px solid {mag_color};">
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">Magnitude</div>
+                    <div style="color: {mag_color}; font-size: 1.2rem; font-weight: 700;">{magnitude}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Normalized: {gamma_diff_normalized:.6f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Interpretation
+            if gamma_differential > 0:
+                if abs_diff > 0.003:
+                    interpretation = "🚀 **STRONG BULLISH GAMMA SETUP**: Heavy OTM call gamma suggests dealers will BUY stock aggressively on upward moves, potentially triggering a gamma squeeze."
+                elif abs_diff > 0.001:
+                    interpretation = "🟢 **MODERATE BULLISH PRESSURE**: OTM call gamma dominance means dealers will amplify upward moves through hedging flows."
+                else:
+                    interpretation = "📊 **SLIGHT BULLISH BIAS**: Small positive gamma differential, limited dealer amplification expected."
+            else:
+                if abs_diff > 0.003:
+                    interpretation = "💥 **STRONG BEARISH GAMMA SETUP**: Heavy OTM put gamma suggests dealers will SELL stock aggressively on downward moves, potentially accelerating declines."
+                elif abs_diff > 0.001:
+                    interpretation = "🔴 **MODERATE BEARISH PRESSURE**: OTM put gamma dominance means dealers will amplify downward moves through hedging flows."
+                else:
+                    interpretation = "📊 **SLIGHT BEARISH BIAS**: Small negative gamma differential, limited dealer amplification expected."
+            
+            st.info(interpretation)
+            st.caption("💡 **Gamma Differential** = OTM Call Gamma - OTM Put Gamma (absolute values, not GEX). High differentials suggest potential for rapid moves as dealers hedge.")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
             cols = st.columns(5)
             with cols[0]:
                 gex_signal = "🟢 GEX SUPPRESSION" if total_gex > 0 else "🔴 GEX AMPLIFICATION"
@@ -1706,7 +2026,7 @@ def main():
             st.markdown("---")
             
             tabs = st.tabs(["🎯 GEX", "📊 DEX", "⚡ NET", "🎪 Hedge",
-                           "🌊 VANNA", "⏰ CHARM", "📈 Timeline", "📋 Data"])
+                           "🌊 VANNA", "⏰ CHARM", "⚡ Γ DIFF", "📈 Timeline", "📋 Data"])
             
             with tabs[0]:
                 st.markdown("### 🎯 Gamma Exposure")
@@ -1735,10 +2055,135 @@ def main():
                 st.markdown("**CHARM**: Delta decay over time")
             
             with tabs[6]:
+                st.markdown("### ⚡ Gamma Differential Analysis")
+                
+                # Separate OTM calls and puts
+                df_otm_calls = df_latest[df_latest['strike'] > spot_price].copy()
+                df_otm_puts = df_latest[df_latest['strike'] < spot_price].copy()
+                
+                # Calculate absolute gamma (not GEX)
+                df_otm_calls['abs_call_gamma'] = df_otm_calls['call_oi'] * df_otm_calls['call_gamma']
+                df_otm_puts['abs_put_gamma'] = df_otm_puts['put_oi'] * df_otm_puts['put_gamma']
+                
+                # Create comparison chart
+                fig = make_subplots(
+                    rows=1, cols=2,
+                    subplot_titles=("📈 OTM Call Gamma (Absolute)", "📉 OTM Put Gamma (Absolute)"),
+                    horizontal_spacing=0.15
+                )
+                
+                # OTM Calls
+                fig.add_trace(
+                    go.Bar(
+                        y=df_otm_calls['strike'],
+                        x=df_otm_calls['abs_call_gamma'],
+                        orientation='h',
+                        marker_color='#10b981',
+                        name='OTM Call Γ',
+                        hovertemplate='Strike: %{y:,.0f}<br>Call Gamma: %{x:,.2f}<extra></extra>'
+                    ),
+                    row=1, col=1
+                )
+                
+                # OTM Puts
+                fig.add_trace(
+                    go.Bar(
+                        y=df_otm_puts['strike'],
+                        x=df_otm_puts['abs_put_gamma'],
+                        orientation='h',
+                        marker_color='#ef4444',
+                        name='OTM Put Γ',
+                        hovertemplate='Strike: %{y:,.0f}<br>Put Gamma: %{x:,.2f}<extra></extra>'
+                    ),
+                    row=1, col=2
+                )
+                
+                # Add spot line
+                fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
+                             annotation_text=f"Spot: {spot_price:,.2f}",
+                             row=1, col=1)
+                fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
+                             annotation_text=f"Spot: {spot_price:,.2f}",
+                             row=1, col=2)
+                
+                fig.update_layout(
+                    title="<b>⚡ OTM Call vs Put Gamma Comparison</b>",
+                    template="plotly_dark",
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(26,35,50,0.8)',
+                    height=700,
+                    showlegend=False
+                )
+                
+                fig.update_xaxes(title_text="Absolute Gamma", row=1, col=1)
+                fig.update_xaxes(title_text="Absolute Gamma", row=1, col=2)
+                fig.update_yaxes(title_text="Strike Price", row=1, col=1)
+                fig.update_yaxes(title_text="Strike Price", row=1, col=2)
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Summary statistics
+                st.markdown("#### 📊 Gamma Distribution Summary")
+                
+                summary_cols = st.columns(3)
+                
+                with summary_cols[0]:
+                    st.metric(
+                        "Total OTM Call Gamma",
+                        f"{total_otm_call_gamma:,.2f}",
+                        delta="Bullish" if total_otm_call_gamma > total_otm_put_gamma else None
+                    )
+                
+                with summary_cols[1]:
+                    st.metric(
+                        "Total OTM Put Gamma",
+                        f"{total_otm_put_gamma:,.2f}",
+                        delta="Bearish" if total_otm_put_gamma > total_otm_call_gamma else None
+                    )
+                
+                with summary_cols[2]:
+                    st.metric(
+                        "Net Differential",
+                        f"{gamma_differential:,.2f}",
+                        delta=f"{gamma_diff_normalized:.6f} normalized"
+                    )
+                
+                # Top gamma strikes
+                st.markdown("#### 🎯 Top Gamma Concentration Strikes")
+                
+                top_call_gamma = df_otm_calls.nlargest(3, 'abs_call_gamma')[['strike', 'abs_call_gamma', 'call_oi']]
+                top_put_gamma = df_otm_puts.nlargest(3, 'abs_put_gamma')[['strike', 'abs_put_gamma', 'put_oi']]
+                
+                gamma_strike_cols = st.columns(2)
+                
+                with gamma_strike_cols[0]:
+                    st.markdown("**📈 Highest OTM Call Gamma Strikes:**")
+                    for idx, row in top_call_gamma.iterrows():
+                        st.markdown(f"- **₹{row['strike']:,.0f}**: {row['abs_call_gamma']:,.2f} gamma ({row['call_oi']:,.0f} OI)")
+                
+                with gamma_strike_cols[1]:
+                    st.markdown("**📉 Highest OTM Put Gamma Strikes:**")
+                    for idx, row in top_put_gamma.iterrows():
+                        st.markdown(f"- **₹{row['strike']:,.0f}**: {row['abs_put_gamma']:,.2f} gamma ({row['put_oi']:,.0f} OI)")
+                
+                # Explanation
+                st.markdown("---")
+                st.markdown("""
+                **💡 Understanding Gamma Differential:**
+                
+                - **Positive Differential** (Call γ > Put γ): Dealers are SHORT OTM calls and will BUY stock when price rises, amplifying upward moves
+                - **Negative Differential** (Put γ > Call γ): Dealers are SHORT OTM puts and will SELL stock when price falls, amplifying downward moves
+                - **High Magnitude** (>0.003): Strong potential for gamma squeeze in that direction
+                - **Concentration**: Strikes with highest gamma are key pivot points where dealer hedging will be most intense
+                
+                This is **absolute gamma** (not GEX), showing raw hedging pressure independent of dealer positioning.
+                """)
+            
+            with tabs[7]:
                 st.markdown("### 📈 Intraday Evolution")
                 st.plotly_chart(create_intraday_timeline(df, selected_timestamp), use_container_width=True)
             
-            with tabs[7]:
+            with tabs[8]:
                 st.markdown("### 📋 Open Interest")
                 st.plotly_chart(create_oi_distribution(df_latest, spot_price), use_container_width=True)
                 
@@ -1831,6 +2276,24 @@ def main():
                 filter_key = 'high_put_volume'
                 st.info("**Filter**: Top 10 stocks by put volume (bearish options activity)")
                 
+            elif filter_type == "⚡ Positive Gamma Differential":
+                filtered_df = df_results[df_results['gamma_differential'] > 0].nlargest(
+                    min(10, len(df_results[df_results['gamma_differential'] > 0])), 
+                    'gamma_diff_normalized'
+                )
+                filter_key = 'positive_gamma_diff'
+                st.info("**Filter**: OTM Call Gamma > OTM Put Gamma (bullish gamma imbalance → potential gamma squeeze upward)")
+                st.caption("💡 **Trading Implication**: Heavy OTM call gamma suggests dealers will buy stock on rallies, amplifying upward moves")
+                
+            elif filter_type == "⚡ Negative Gamma Differential":
+                filtered_df = df_results[df_results['gamma_differential'] < 0].nsmallest(
+                    min(10, len(df_results[df_results['gamma_differential'] < 0])), 
+                    'gamma_diff_normalized'
+                )
+                filter_key = 'negative_gamma_diff'
+                st.info("**Filter**: OTM Put Gamma > OTM Call Gamma (bearish gamma imbalance → potential gamma squeeze downward)")
+                st.caption("💡 **Trading Implication**: Heavy OTM put gamma suggests dealers will sell stock on declines, amplifying downward moves")
+                
             else:
                 filtered_df = df_results
                 filter_key = 'all'
@@ -1847,7 +2310,7 @@ def main():
                 st.markdown("---")
                 st.markdown("### 📈 Visual Comparison")
                 
-                chart_tabs = st.tabs(["🎯 NET GEX", "📊 Volume Split", "📈 Total Volume"])
+                chart_tabs = st.tabs(["🎯 NET GEX", "📊 Volume Split", "📈 Total Volume", "⚡ Gamma Differential"])
                 
                 with chart_tabs[0]:
                     st.plotly_chart(create_screener_summary_chart(filtered_df), use_container_width=True)
@@ -1861,11 +2324,28 @@ def main():
                     st.plotly_chart(create_total_volume_chart(filtered_df), use_container_width=True)
                     st.caption("**Total Volume**: Combined call + put options activity")
                 
+                with chart_tabs[3]:
+                    st.plotly_chart(create_gamma_differential_chart(filtered_df), use_container_width=True)
+                    st.caption("**Gamma Differential**: Positive (green) = OTM call gamma dominance (bullish squeeze potential) | Negative (red) = OTM put gamma dominance (bearish pressure potential)")
+                    st.caption("💡 **Key Insight**: Large gamma imbalances suggest potential for rapid moves as dealers hedge their gamma exposure")
+                
                 st.markdown("---")
                 export_data = filtered_df[['symbol', 'spot_price', 'total_gex', 'total_dex', 'pcr', 
-                                           'total_volume', 'call_volume', 'put_volume', 'volume_pcr', 
+                                           'total_volume', 'call_volume', 'put_volume', 'volume_pcr',
+                                           'gamma_differential', 'gamma_diff_normalized',
                                            'timestamp']].copy()
                 export_data['flip_zones_count'] = filtered_df['flip_analysis'].apply(lambda x: x['flip_count'] if x['has_flip_zones'] else 0)
+                
+                # Add high volume strikes summary
+                export_data['top_strike_1'] = filtered_df['top_volume_strikes'].apply(
+                    lambda x: f"{x[0]['strike']} ({x[0]['total_volume']})" if x and len(x) > 0 else ""
+                )
+                export_data['top_strike_2'] = filtered_df['top_volume_strikes'].apply(
+                    lambda x: f"{x[1]['strike']} ({x[1]['total_volume']})" if x and len(x) > 1 else ""
+                )
+                export_data['top_strike_3'] = filtered_df['top_volume_strikes'].apply(
+                    lambda x: f"{x[2]['strike']} ({x[2]['total_volume']})" if x and len(x) > 2 else ""
+                )
                 
                 csv = export_data.to_csv(index=False)
                 st.download_button("📥 Download Results (CSV)", data=csv,
@@ -1899,6 +2379,15 @@ def main():
             - 📊 **High Volume (Top 10)**: Highest total options activity
             - 📈 **High Call Volume**: Highest call buying (bullish sentiment)
             - 📉 **High Put Volume**: Highest put buying (bearish sentiment)
+            
+            **Gamma Differential Filters (NEW!):**
+            - ⚡ **Positive Gamma Differential**: OTM call gamma > OTM put gamma → Bullish gamma squeeze potential
+            - ⚡ **Negative Gamma Differential**: OTM put gamma > OTM call gamma → Bearish gamma pressure
+            
+            **NEW Features:**
+            - 📍 **High Volume Strikes**: See which specific strikes have the most activity
+            - ⚡ **Gamma Differential**: Absolute gamma comparison (not GEX) between OTM calls and puts
+            - 📊 **4 Comparison Charts**: GEX, Volume, Total Volume, and Gamma Differential
             """)
     
     st.markdown("---")
