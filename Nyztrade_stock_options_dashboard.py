@@ -1213,25 +1213,18 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
         gamma_diff = row.get('gamma_differential', 0)
         gamma_diff_label = 'OTM Call γ > Put γ' if gamma_diff > 0 else 'OTM Put γ > Call γ'
         
-        # Build high volume strikes HTML inline to avoid escaping issues
-        strikes_html_content = ""
-        if top_strikes and len(top_strikes) > 0:
-            strikes_display = " | ".join([f"₹{s['strike']:,.0f} ({s['total_volume']:,.0f})" for s in top_strikes[:3]])
-            strikes_html_content = f"""
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
-                <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">📍 HIGH VOLUME STRIKES</p>
-                <p style="margin: 5px 0; color: #06b6d4; font-weight: 600; font-size: 0.9rem;">
-                    {strikes_display}
-                </p>
-            </div>
-            """
-        
         # Determine colors
         gex_color = '#10b981' if row['total_gex'] > 0 else '#ef4444'
         dex_color = '#10b981' if row['total_dex'] > 0 else '#ef4444'
         gamma_diff_color = '#10b981' if gamma_diff > 0 else '#ef4444'
         
-        st.markdown(f"""
+        # Build strikes display text
+        strikes_text = ""
+        if top_strikes and len(top_strikes) > 0:
+            strikes_text = " | ".join([f"₹{s['strike']:,.0f} ({s['total_volume']:,.0f})" for s in top_strikes[:3]])
+        
+        # Create card HTML
+        card_html = f"""
         <div class="screener-card {card_class}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
@@ -1281,8 +1274,20 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
                     <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">VOL P/C RATIO</p>
                     <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{volume_pcr:.2f}</p>
                 </div>
-            </div>
-            {strikes_html_content}
+            </div>"""
+        
+        # Add high volume strikes if available
+        if strikes_text:
+            card_html += f"""
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
+                <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">📍 HIGH VOLUME STRIKES</p>
+                <p style="margin: 5px 0; color: #06b6d4; font-weight: 600; font-size: 0.9rem;">
+                    {strikes_text}
+                </p>
+            </div>"""
+        
+        # Add gamma differential and footer
+        card_html += f"""
             <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div>
@@ -1302,7 +1307,9 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
                 </p>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        
+        st.markdown(card_html, unsafe_allow_html=True)
 
 def create_screener_summary_chart(df_results: pd.DataFrame) -> go.Figure:
     """Summary chart for screener"""
