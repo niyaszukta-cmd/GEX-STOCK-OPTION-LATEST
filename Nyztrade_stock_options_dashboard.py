@@ -681,14 +681,16 @@ class DhanStockOptionsFetcher:
                 call_dex = (call_oi * call_delta * spot_price * lot_size) / 1e7
                 put_dex = (put_oi * put_delta * spot_price * lot_size) / 1e7
                 
-                # Track strike volumes
+                # Track strike volumes and actual gamma values
                 strike_volumes.append({
                     'strike': strike_price,
                     'call_volume': call_volume,
                     'put_volume': put_volume,
                     'total_volume': call_volume + put_volume,
-                    'call_gamma_abs': call_gamma * call_oi,  # Absolute gamma
-                    'put_gamma_abs': put_gamma * put_oi,
+                    'call_gamma': call_gamma,  # Actual BS gamma (e.g., 0.05)
+                    'put_gamma': put_gamma,    # Actual BS gamma (e.g., 0.03)
+                    'call_oi': call_oi,
+                    'put_oi': put_oi,
                     'moneyness': 'OTM_CALL' if strike_price > spot_price else ('OTM_PUT' if strike_price < spot_price else 'ATM')
                 })
                 
@@ -734,15 +736,17 @@ class DhanStockOptionsFetcher:
             top_volume_strikes = strike_df.nlargest(3, 'total_volume')[['strike', 'total_volume']].to_dict('records')
             
             # Calculate gamma differential (OTM calls vs OTM puts)
+            # Using actual Black-Scholes gamma values (not multiplied by OI)
             otm_calls = strike_df[strike_df['moneyness'] == 'OTM_CALL']
             otm_puts = strike_df[strike_df['moneyness'] == 'OTM_PUT']
             
-            total_otm_call_gamma = otm_calls['call_gamma_abs'].sum() if len(otm_calls) > 0 else 0
-            total_otm_put_gamma = otm_puts['put_gamma_abs'].sum() if len(otm_puts) > 0 else 0
+            # Sum of actual BS gamma values across OTM strikes
+            total_otm_call_gamma = otm_calls['call_gamma'].sum() if len(otm_calls) > 0 else 0
+            total_otm_put_gamma = otm_puts['put_gamma'].sum() if len(otm_puts) > 0 else 0
             gamma_differential = total_otm_call_gamma - total_otm_put_gamma
             
-            # Normalize by spot for comparison across stocks
-            gamma_diff_normalized = gamma_differential / spot_price if spot_price > 0 else 0
+            # Normalize by number of strikes for fair comparison
+            gamma_diff_normalized = gamma_differential
         else:
             top_volume_strikes = []
             gamma_differential = 0
@@ -1293,7 +1297,7 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
                     <div>
                         <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</p>
                         <p style="margin: 5px 0; color: {gamma_diff_color}; font-weight: 600; font-size: 0.85rem;">
-                            {gamma_diff:.4f} ({gamma_diff_label})
+                            {gamma_diff:.6f} ({gamma_diff_label})
                         </p>
                     </div>
                     <div>
@@ -1783,11 +1787,11 @@ def main():
                     """, unsafe_allow_html=True)
             
             with quick_cols[1]:
-                # Gamma differential quick view
+                # Gamma differential quick view - using actual BS gamma values
                 otm_calls_quick = df_latest[df_latest['strike'] > spot_price]
                 otm_puts_quick = df_latest[df_latest['strike'] < spot_price]
-                call_gamma_quick = (otm_calls_quick['call_oi'] * otm_calls_quick['call_gamma']).sum() if len(otm_calls_quick) > 0 else 0
-                put_gamma_quick = (otm_puts_quick['put_oi'] * otm_puts_quick['put_gamma']).sum() if len(otm_puts_quick) > 0 else 0
+                call_gamma_quick = otm_calls_quick['call_gamma'].sum() if len(otm_calls_quick) > 0 else 0
+                put_gamma_quick = otm_puts_quick['put_gamma'].sum() if len(otm_puts_quick) > 0 else 0
                 gamma_diff_quick = call_gamma_quick - put_gamma_quick
                 
                 gamma_color_quick = "var(--accent-green)" if gamma_diff_quick > 0 else "var(--accent-red)"
@@ -1798,10 +1802,10 @@ def main():
                 <div class="metric-card {'positive' if gamma_diff_quick > 0 else 'negative'}">
                     <div style="color: var(--text-muted); font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</div>
                     <div style="color: {gamma_color_quick}; font-size: 1.3rem; font-weight: 700; margin: 8px 0;">
-                        {gamma_diff_quick:,.2f} {gamma_arrow}
+                        {gamma_diff_quick:.6f} {gamma_arrow}
                     </div>
                     <div style="color: var(--text-secondary); font-size: 0.75rem;">
-                        {gamma_signal_quick}
+                        {gamma_signal_quick} (BS Γ)
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1933,15 +1937,16 @@ def main():
             # Gamma Differential Analysis
             st.markdown("### ⚡ Gamma Differential Analysis")
             
-            # Calculate gamma differential for current view
+            # Calculate gamma differential for current view using actual BS gamma values
             df_current = df_latest.copy()
             otm_calls = df_current[df_current['strike'] > spot_price]
             otm_puts = df_current[df_current['strike'] < spot_price]
             
-            total_otm_call_gamma = (otm_calls['call_oi'] * otm_calls['call_gamma']).sum() if len(otm_calls) > 0 else 0
-            total_otm_put_gamma = (otm_puts['put_oi'] * otm_puts['put_gamma']).sum() if len(otm_puts) > 0 else 0
+            # Sum of actual Black-Scholes gamma values (not multiplied by OI)
+            total_otm_call_gamma = otm_calls['call_gamma'].sum() if len(otm_calls) > 0 else 0
+            total_otm_put_gamma = otm_puts['put_gamma'].sum() if len(otm_puts) > 0 else 0
             gamma_differential = total_otm_call_gamma - total_otm_put_gamma
-            gamma_diff_normalized = gamma_differential / spot_price if spot_price > 0 else 0
+            gamma_diff_normalized = gamma_differential
             
             gamma_cols = st.columns(4)
             
@@ -1949,8 +1954,8 @@ def main():
                 st.markdown(f"""
                 <div class="metric-card neutral" style="border-left: 4px solid var(--accent-green);">
                     <div style="color: var(--text-muted); font-size: 0.8rem;">OTM Call Gamma</div>
-                    <div style="color: var(--accent-green); font-size: 1.2rem; font-weight: 700;">{total_otm_call_gamma:,.2f}</div>
-                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Absolute Γ</div>
+                    <div style="color: var(--accent-green); font-size: 1.2rem; font-weight: 700;">{total_otm_call_gamma:.6f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">BS Gamma (Sum)</div>
                 </div>
                 """, unsafe_allow_html=True)
             
@@ -1958,8 +1963,8 @@ def main():
                 st.markdown(f"""
                 <div class="metric-card neutral" style="border-left: 4px solid var(--accent-red);">
                     <div style="color: var(--text-muted); font-size: 0.8rem;">OTM Put Gamma</div>
-                    <div style="color: var(--accent-red); font-size: 1.2rem; font-weight: 700;">{total_otm_put_gamma:,.2f}</div>
-                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Absolute Γ</div>
+                    <div style="color: var(--accent-red); font-size: 1.2rem; font-weight: 700;">{total_otm_put_gamma:.6f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">BS Gamma (Sum)</div>
                 </div>
                 """, unsafe_allow_html=True)
             
@@ -1969,18 +1974,18 @@ def main():
                 st.markdown(f"""
                 <div class="metric-card {'positive' if gamma_differential > 0 else 'negative'}">
                     <div style="color: var(--text-muted); font-size: 0.8rem;">Gamma Differential</div>
-                    <div style="color: {gamma_diff_color}; font-size: 1.2rem; font-weight: 700;">{gamma_differential:,.2f}</div>
+                    <div style="color: {gamma_diff_color}; font-size: 1.2rem; font-weight: 700;">{gamma_differential:.6f}</div>
                     <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">{gamma_diff_signal}</div>
                 </div>
                 """, unsafe_allow_html=True)
             
             with gamma_cols[3]:
-                # Magnitude indicator
+                # Magnitude indicator based on absolute gamma values
                 abs_diff = abs(gamma_diff_normalized)
-                if abs_diff > 0.003:
+                if abs_diff > 0.15:
                     magnitude = "VERY HIGH"
                     mag_color = "var(--accent-yellow)"
-                elif abs_diff > 0.001:
+                elif abs_diff > 0.05:
                     magnitude = "MODERATE"
                     mag_color = "var(--accent-cyan)"
                 else:
@@ -1991,28 +1996,28 @@ def main():
                 <div class="metric-card neutral" style="border-left: 4px solid {mag_color};">
                     <div style="color: var(--text-muted); font-size: 0.8rem;">Magnitude</div>
                     <div style="color: {mag_color}; font-size: 1.2rem; font-weight: 700;">{magnitude}</div>
-                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Normalized: {gamma_diff_normalized:.6f}</div>
+                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 3px;">Differential: {gamma_diff_normalized:.6f}</div>
                 </div>
                 """, unsafe_allow_html=True)
             
             # Interpretation
             if gamma_differential > 0:
-                if abs_diff > 0.003:
-                    interpretation = "🚀 **STRONG BULLISH GAMMA SETUP**: Heavy OTM call gamma suggests dealers will BUY stock aggressively on upward moves, potentially triggering a gamma squeeze."
-                elif abs_diff > 0.001:
-                    interpretation = "🟢 **MODERATE BULLISH PRESSURE**: OTM call gamma dominance means dealers will amplify upward moves through hedging flows."
+                if abs_diff > 0.15:
+                    interpretation = "🚀 **STRONG BULLISH GAMMA SETUP**: OTM call strikes have significantly higher Black-Scholes gamma values, indicating strong curvature sensitivity to upward moves."
+                elif abs_diff > 0.05:
+                    interpretation = "🟢 **MODERATE BULLISH PRESSURE**: OTM call gamma (BS values) dominance means higher rate of delta change on upward price moves."
                 else:
-                    interpretation = "📊 **SLIGHT BULLISH BIAS**: Small positive gamma differential, limited dealer amplification expected."
+                    interpretation = "📊 **SLIGHT BULLISH BIAS**: Small positive gamma differential based on Black-Scholes values."
             else:
-                if abs_diff > 0.003:
-                    interpretation = "💥 **STRONG BEARISH GAMMA SETUP**: Heavy OTM put gamma suggests dealers will SELL stock aggressively on downward moves, potentially accelerating declines."
-                elif abs_diff > 0.001:
-                    interpretation = "🔴 **MODERATE BEARISH PRESSURE**: OTM put gamma dominance means dealers will amplify downward moves through hedging flows."
+                if abs_diff > 0.15:
+                    interpretation = "💥 **STRONG BEARISH GAMMA SETUP**: OTM put strikes have significantly higher Black-Scholes gamma values, indicating strong curvature sensitivity to downward moves."
+                elif abs_diff > 0.05:
+                    interpretation = "🔴 **MODERATE BEARISH PRESSURE**: OTM put gamma (BS values) dominance means higher rate of delta change on downward price moves."
                 else:
-                    interpretation = "📊 **SLIGHT BEARISH BIAS**: Small negative gamma differential, limited dealer amplification expected."
+                    interpretation = "📊 **SLIGHT BEARISH BIAS**: Small negative gamma differential based on Black-Scholes values."
             
             st.info(interpretation)
-            st.caption("💡 **Gamma Differential** = OTM Call Gamma - OTM Put Gamma (absolute values, not GEX). High differentials suggest potential for rapid moves as dealers hedge.")
+            st.caption("💡 **Gamma Differential** = Sum of OTM Call BS Gamma - Sum of OTM Put BS Gamma. These are actual Black-Scholes gamma values (like 0.05, 0.03), NOT multiplied by OI or spot. Shows which direction has higher gamma curvature.")
             
             st.markdown("<br>", unsafe_allow_html=True)
             
@@ -2073,14 +2078,14 @@ def main():
                 df_otm_calls = df_latest[df_latest['strike'] > spot_price].copy()
                 df_otm_puts = df_latest[df_latest['strike'] < spot_price].copy()
                 
-                # Calculate absolute gamma (not GEX)
-                df_otm_calls['abs_call_gamma'] = df_otm_calls['call_oi'] * df_otm_calls['call_gamma']
-                df_otm_puts['abs_put_gamma'] = df_otm_puts['put_oi'] * df_otm_puts['put_gamma']
+                # Use actual Black-Scholes gamma values (not multiplied by OI)
+                df_otm_calls['bs_call_gamma'] = df_otm_calls['call_gamma']
+                df_otm_puts['bs_put_gamma'] = df_otm_puts['put_gamma']
                 
                 # Create comparison chart
                 fig = make_subplots(
                     rows=1, cols=2,
-                    subplot_titles=("📈 OTM Call Gamma (Absolute)", "📉 OTM Put Gamma (Absolute)"),
+                    subplot_titles=("📈 OTM Call BS Gamma", "📉 OTM Put BS Gamma"),
                     horizontal_spacing=0.15
                 )
                 
@@ -2088,11 +2093,11 @@ def main():
                 fig.add_trace(
                     go.Bar(
                         y=df_otm_calls['strike'],
-                        x=df_otm_calls['abs_call_gamma'],
+                        x=df_otm_calls['bs_call_gamma'],
                         orientation='h',
                         marker_color='#10b981',
                         name='OTM Call Γ',
-                        hovertemplate='Strike: %{y:,.0f}<br>Call Gamma: %{x:,.2f}<extra></extra>'
+                        hovertemplate='Strike: %{y:,.0f}<br>BS Gamma: %{x:.6f}<extra></extra>'
                     ),
                     row=1, col=1
                 )
@@ -2101,11 +2106,11 @@ def main():
                 fig.add_trace(
                     go.Bar(
                         y=df_otm_puts['strike'],
-                        x=df_otm_puts['abs_put_gamma'],
+                        x=df_otm_puts['bs_put_gamma'],
                         orientation='h',
                         marker_color='#ef4444',
                         name='OTM Put Γ',
-                        hovertemplate='Strike: %{y:,.0f}<br>Put Gamma: %{x:,.2f}<extra></extra>'
+                        hovertemplate='Strike: %{y:,.0f}<br>BS Gamma: %{x:.6f}<extra></extra>'
                     ),
                     row=1, col=2
                 )
@@ -2119,7 +2124,7 @@ def main():
                              row=1, col=2)
                 
                 fig.update_layout(
-                    title="<b>⚡ OTM Call vs Put Gamma Comparison</b>",
+                    title="<b>⚡ OTM Call vs Put Black-Scholes Gamma Comparison</b>",
                     template="plotly_dark",
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(26,35,50,0.8)',
@@ -2127,8 +2132,8 @@ def main():
                     showlegend=False
                 )
                 
-                fig.update_xaxes(title_text="Absolute Gamma", row=1, col=1)
-                fig.update_xaxes(title_text="Absolute Gamma", row=1, col=2)
+                fig.update_xaxes(title_text="BS Gamma Value", row=1, col=1)
+                fig.update_xaxes(title_text="BS Gamma Value", row=1, col=2)
                 fig.update_yaxes(title_text="Strike Price", row=1, col=1)
                 fig.update_yaxes(title_text="Strike Price", row=1, col=2)
                 
@@ -2142,53 +2147,53 @@ def main():
                 with summary_cols[0]:
                     st.metric(
                         "Total OTM Call Gamma",
-                        f"{total_otm_call_gamma:,.2f}",
+                        f"{total_otm_call_gamma:.6f}",
                         delta="Bullish" if total_otm_call_gamma > total_otm_put_gamma else None
                     )
                 
                 with summary_cols[1]:
                     st.metric(
                         "Total OTM Put Gamma",
-                        f"{total_otm_put_gamma:,.2f}",
+                        f"{total_otm_put_gamma:.6f}",
                         delta="Bearish" if total_otm_put_gamma > total_otm_call_gamma else None
                     )
                 
                 with summary_cols[2]:
                     st.metric(
                         "Net Differential",
-                        f"{gamma_differential:,.2f}",
-                        delta=f"{gamma_diff_normalized:.6f} normalized"
+                        f"{gamma_differential:.6f}",
+                        delta=f"BS Gamma Diff"
                     )
                 
                 # Top gamma strikes
-                st.markdown("#### 🎯 Top Gamma Concentration Strikes")
+                st.markdown("#### 🎯 Top BS Gamma Strikes")
                 
-                top_call_gamma = df_otm_calls.nlargest(3, 'abs_call_gamma')[['strike', 'abs_call_gamma', 'call_oi']]
-                top_put_gamma = df_otm_puts.nlargest(3, 'abs_put_gamma')[['strike', 'abs_put_gamma', 'put_oi']]
+                top_call_gamma = df_otm_calls.nlargest(3, 'bs_call_gamma')[['strike', 'bs_call_gamma', 'call_oi']]
+                top_put_gamma = df_otm_puts.nlargest(3, 'bs_put_gamma')[['strike', 'bs_put_gamma', 'put_oi']]
                 
                 gamma_strike_cols = st.columns(2)
                 
                 with gamma_strike_cols[0]:
-                    st.markdown("**📈 Highest OTM Call Gamma Strikes:**")
+                    st.markdown("**📈 Highest OTM Call BS Gamma Strikes:**")
                     for idx, row in top_call_gamma.iterrows():
-                        st.markdown(f"- **₹{row['strike']:,.0f}**: {row['abs_call_gamma']:,.2f} gamma ({row['call_oi']:,.0f} OI)")
+                        st.markdown(f"- **₹{row['strike']:,.0f}**: {row['bs_call_gamma']:.6f} γ ({row['call_oi']:,.0f} OI)")
                 
                 with gamma_strike_cols[1]:
-                    st.markdown("**📉 Highest OTM Put Gamma Strikes:**")
+                    st.markdown("**📉 Highest OTM Put BS Gamma Strikes:**")
                     for idx, row in top_put_gamma.iterrows():
-                        st.markdown(f"- **₹{row['strike']:,.0f}**: {row['abs_put_gamma']:,.2f} gamma ({row['put_oi']:,.0f} OI)")
+                        st.markdown(f"- **₹{row['strike']:,.0f}**: {row['bs_put_gamma']:.6f} γ ({row['put_oi']:,.0f} OI)")
                 
                 # Explanation
                 st.markdown("---")
                 st.markdown("""
-                **💡 Understanding Gamma Differential:**
+                **💡 Understanding Black-Scholes Gamma Differential:**
                 
-                - **Positive Differential** (Call γ > Put γ): Dealers are SHORT OTM calls and will BUY stock when price rises, amplifying upward moves
-                - **Negative Differential** (Put γ > Call γ): Dealers are SHORT OTM puts and will SELL stock when price falls, amplifying downward moves
-                - **High Magnitude** (>0.003): Strong potential for gamma squeeze in that direction
-                - **Concentration**: Strikes with highest gamma are key pivot points where dealer hedging will be most intense
+                - **Positive Differential** (Call γ > Put γ): OTM calls have higher gamma values, meaning faster delta changes on upward price moves
+                - **Negative Differential** (Put γ > Call γ): OTM puts have higher gamma values, meaning faster delta changes on downward price moves
+                - **High Magnitude**: Large differentials suggest asymmetric options positioning
+                - **Values**: These are actual Black-Scholes gamma values (e.g., 0.05, 0.03) - NOT multiplied by OI or spot
                 
-                This is **absolute gamma** (not GEX), showing raw hedging pressure independent of dealer positioning.
+                Gamma measures the rate of change of delta. Higher gamma = more sensitive to price changes.
                 """)
             
             with tabs[7]:
