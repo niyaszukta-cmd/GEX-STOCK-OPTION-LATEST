@@ -1208,91 +1208,96 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
         
         # Get high volume strikes
         top_strikes = row.get('top_volume_strikes', [])
+        
+        # Get gamma differential
+        gamma_diff = row.get('gamma_differential', 0)
+        gamma_diff_label = 'OTM Call γ > Put γ' if gamma_diff > 0 else 'OTM Put γ > Call γ'
+        
+        # Build high volume strikes HTML inline to avoid escaping issues
+        strikes_html_content = ""
         if top_strikes and len(top_strikes) > 0:
             strikes_display = " | ".join([f"₹{s['strike']:,.0f} ({s['total_volume']:,.0f})" for s in top_strikes[:3]])
-            high_vol_strikes_html = f"""
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">📍 HIGH VOLUME STRIKES</p>
-                <p style="margin: 5px 0; color: var(--accent-cyan); font-weight: 600; font-size: 0.9rem;">
+            strikes_html_content = f"""
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
+                <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">📍 HIGH VOLUME STRIKES</p>
+                <p style="margin: 5px 0; color: #06b6d4; font-weight: 600; font-size: 0.9rem;">
                     {strikes_display}
                 </p>
             </div>
             """
-        else:
-            high_vol_strikes_html = ""
         
-        # Get gamma differential
-        gamma_diff = row.get('gamma_differential', 0)
-        gamma_diff_color = 'var(--accent-green)' if gamma_diff > 0 else 'var(--accent-red)'
-        gamma_diff_label = 'OTM Call γ > Put γ' if gamma_diff > 0 else 'OTM Put γ > Call γ'
+        # Determine colors
+        gex_color = '#10b981' if row['total_gex'] > 0 else '#ef4444'
+        dex_color = '#10b981' if row['total_dex'] > 0 else '#ef4444'
+        gamma_diff_color = '#10b981' if gamma_diff > 0 else '#ef4444'
         
         st.markdown(f"""
         <div class="screener-card {card_class}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <h3 style="margin: 0; color: var(--text-primary); font-size: 1.5rem;">{row['symbol']}</h3>
-                    <p style="margin: 5px 0; color: var(--text-secondary);">Spot: ₹{row['spot_price']:,.2f}</p>
+                    <h3 style="margin: 0; color: #f8fafc; font-size: 1.5rem;">{row['symbol']}</h3>
+                    <p style="margin: 5px 0; color: #cbd5e1;">Spot: ₹{row['spot_price']:,.2f}</p>
                 </div>
                 <div class="opportunity-badge {signal_badge}">{signal_text}</div>
             </div>
             <div style="margin-top: 15px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">NET GEX</p>
-                    <p style="margin: 5px 0; color: {'var(--accent-green)' if row['total_gex'] > 0 else 'var(--accent-red)'}; font-weight: 600;">
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">NET GEX</p>
+                    <p style="margin: 5px 0; color: {gex_color}; font-weight: 600;">
                         {row['total_gex']:.4f}Cr
                     </p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">NET DEX</p>
-                    <p style="margin: 5px 0; color: {'var(--accent-green)' if row['total_dex'] > 0 else 'var(--accent-red)'}; font-weight: 600;">
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">NET DEX</p>
+                    <p style="margin: 5px 0; color: {dex_color}; font-weight: 600;">
                         {row['total_dex']:.4f}Cr
                     </p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">OI P/C RATIO</p>
-                    <p style="margin: 5px 0; color: var(--text-primary); font-weight: 600;">{row['pcr']:.2f}</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">OI P/C RATIO</p>
+                    <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{row['pcr']:.2f}</p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">FLIP ZONES</p>
-                    <p style="margin: 5px 0; color: var(--accent-yellow); font-weight: 600;">
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">FLIP ZONES</p>
+                    <p style="margin: 5px 0; color: #fbbf24; font-weight: 600;">
                         {flip_analysis['flip_count'] if flip_analysis['has_flip_zones'] else 0}
                     </p>
                 </div>
             </div>
-            <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+            <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding-top: 10px; border-top: 1px solid #374151;">
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">TOTAL VOLUME</p>
-                    <p style="margin: 5px 0; color: var(--accent-cyan); font-weight: 600;">{total_volume:,.0f}</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">TOTAL VOLUME</p>
+                    <p style="margin: 5px 0; color: #06b6d4; font-weight: 600;">{total_volume:,.0f}</p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">CALL VOLUME</p>
-                    <p style="margin: 5px 0; color: var(--accent-green); font-weight: 600;">{call_volume:,.0f}</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">CALL VOLUME</p>
+                    <p style="margin: 5px 0; color: #10b981; font-weight: 600;">{call_volume:,.0f}</p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">PUT VOLUME</p>
-                    <p style="margin: 5px 0; color: var(--accent-red); font-weight: 600;">{put_volume:,.0f}</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">PUT VOLUME</p>
+                    <p style="margin: 5px 0; color: #ef4444; font-weight: 600;">{put_volume:,.0f}</p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">VOL P/C RATIO</p>
-                    <p style="margin: 5px 0; color: var(--text-primary); font-weight: 600;">{volume_pcr:.2f}</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">VOL P/C RATIO</p>
+                    <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{volume_pcr:.2f}</p>
                 </div>
             </div>
-            {high_vol_strikes_html}
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+            {strikes_html_content}
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div>
-                        <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</p>
+                        <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</p>
                         <p style="margin: 5px 0; color: {gamma_diff_color}; font-weight: 600; font-size: 0.85rem;">
                             {gamma_diff:.4f} ({gamma_diff_label})
                         </p>
                     </div>
                     <div>
-                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem;">
+                        <p style="margin: 0; color: #cbd5e1; font-size: 0.85rem;">
                             🔄 {flip_info}
                         </p>
                     </div>
                 </div>
-                <p style="margin: 5px 0 0 0; color: var(--text-muted); font-size: 0.75rem;">
+                <p style="margin: 5px 0 0 0; color: #9ca3af; font-size: 0.75rem;">
                     {row['timestamp']} | {row['strikes_analyzed']} strikes analyzed
                 </p>
             </div>
