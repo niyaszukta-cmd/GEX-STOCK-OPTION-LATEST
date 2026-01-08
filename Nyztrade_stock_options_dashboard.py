@@ -183,8 +183,7 @@ st.markdown("""
 @dataclass
 class DhanConfig:
     client_id: str = "1100480354"
-    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3Nzc1Mzk3LCJhcHBfaWQiOiJlZDMwMzI5NCIsImlhdCI6MTc2NzY4ODk5NywidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.BeP4GfNg5r1JO2L7Zr15I6wPF523BCJyHlilBZc0dq_Yg4MNN-PHWpxF1VjWd2LatSUbB7lwkJ1GaYuflLbqAQ"
-
+    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODkzMDI4LCJhcHBfaWQiOiJlZDMwMzI5NCIsImlhdCI6MTc2NzgwNjYyOCwidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.OvP_-naB_4O_qga01ouG4O9bHGJUoZV3WhVsOkCjRhN8zlCxckVwMEHoKayRyCFMtayHliU8_mH62f7rb3KDcw"
 DHAN_STOCK_SECURITY_IDS = {
     "RELIANCE": 2885, "TCS": 11536, "HDFCBANK": 1333, "INFY": 1594,
     "ICICIBANK": 4963, "SBIN": 3045, "BHARTIARTL": 1195, "ITC": 1660,
@@ -645,6 +644,8 @@ class DhanStockOptionsFetcher:
                 
                 call_oi = ce_data.get('oi', [0])[-1] if ce_data.get('oi') else 0
                 put_oi = pe_data.get('oi', [0])[-1] if pe_data.get('oi') else 0
+                call_volume = ce_data.get('volume', [0])[-1] if ce_data.get('volume') else 0
+                put_volume = pe_data.get('volume', [0])[-1] if pe_data.get('volume') else 0
                 call_iv = ce_data.get('iv', [15])[-1] if ce_data.get('iv') else 15
                 put_iv = pe_data.get('iv', [15])[-1] if pe_data.get('iv') else 15
                 
@@ -671,6 +672,8 @@ class DhanStockOptionsFetcher:
                     'strike': strike_price,
                     'call_oi': call_oi,
                     'put_oi': put_oi,
+                    'call_volume': call_volume,
+                    'put_volume': put_volume,
                     'call_gex': call_gex,
                     'put_gex': put_gex,
                     'net_gex': call_gex + put_gex,
@@ -693,6 +696,10 @@ class DhanStockOptionsFetcher:
         total_gex = df['net_gex'].sum()
         total_dex = df['net_dex'].sum()
         pcr = df['put_oi'].sum() / df['call_oi'].sum() if df['call_oi'].sum() > 0 else 1
+        total_call_volume = df['call_volume'].sum()
+        total_put_volume = df['put_volume'].sum()
+        total_volume = total_call_volume + total_put_volume
+        volume_pcr = total_put_volume / total_call_volume if total_call_volume > 0 else 1
         
         return {
             'success': True,
@@ -701,6 +708,10 @@ class DhanStockOptionsFetcher:
             'total_gex': total_gex,
             'total_dex': total_dex,
             'pcr': pcr,
+            'total_volume': total_volume,
+            'call_volume': total_call_volume,
+            'put_volume': total_put_volume,
+            'volume_pcr': volume_pcr,
             'flip_zones': flip_zones,
             'flip_analysis': flip_analysis,
             'strikes_analyzed': len(df),
@@ -1111,20 +1122,39 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
     for idx, row in df_results.iterrows():
         flip_analysis = row['flip_analysis']
         
-        if filter_type == 'above':
+        # Determine card styling based on filter type
+        if filter_type in ['above', 'positive_gex']:
             card_class = 'bullish'
             signal_badge = 'long'
             signal_text = '🟢 LONG OPPORTUNITY'
-        else:
+        elif filter_type in ['below', 'negative_gex']:
             card_class = 'bearish'
             signal_badge = 'short'
             signal_text = '🔴 SHORT OPPORTUNITY'
+        elif filter_type in ['high_volume', 'high_call_volume']:
+            card_class = 'bullish'
+            signal_badge = 'long'
+            signal_text = '📊 HIGH VOLUME'
+        elif filter_type == 'high_put_volume':
+            card_class = 'bearish'
+            signal_badge = 'short'
+            signal_text = '📉 HIGH PUT VOLUME'
+        else:
+            card_class = 'neutral'
+            signal_badge = 'long' if row.get('total_gex', 0) > 0 else 'short'
+            signal_text = '🔵 FLIP ZONE DETECTED'
         
         if flip_analysis['has_flip_zones'] and flip_analysis['nearest_flip']:
             nearest = flip_analysis['nearest_flip']
             flip_info = f"Flip @ ₹{nearest['strike']:,.2f} ({nearest['distance_pct']:.2f}% away) {nearest['arrow']}"
         else:
             flip_info = "No flip zones"
+        
+        # Get volume data
+        total_volume = row.get('total_volume', 0)
+        call_volume = row.get('call_volume', 0)
+        put_volume = row.get('put_volume', 0)
+        volume_pcr = row.get('volume_pcr', 1)
         
         st.markdown(f"""
         <div class="screener-card {card_class}">
@@ -1149,7 +1179,7 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
                     </p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">PUT/CALL RATIO</p>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">OI P/C RATIO</p>
                     <p style="margin: 5px 0; color: var(--text-primary); font-weight: 600;">{row['pcr']:.2f}</p>
                 </div>
                 <div>
@@ -1157,6 +1187,24 @@ def display_screener_results(df_results: pd.DataFrame, filter_type: str):
                     <p style="margin: 5px 0; color: var(--accent-yellow); font-weight: 600;">
                         {flip_analysis['flip_count'] if flip_analysis['has_flip_zones'] else 0}
                     </p>
+                </div>
+            </div>
+            <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">TOTAL VOLUME</p>
+                    <p style="margin: 5px 0; color: var(--accent-cyan); font-weight: 600;">{total_volume:,.0f}</p>
+                </div>
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">CALL VOLUME</p>
+                    <p style="margin: 5px 0; color: var(--accent-green); font-weight: 600;">{call_volume:,.0f}</p>
+                </div>
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">PUT VOLUME</p>
+                    <p style="margin: 5px 0; color: var(--accent-red); font-weight: 600;">{put_volume:,.0f}</p>
+                </div>
+                <div>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.8rem;">VOL P/C RATIO</p>
+                    <p style="margin: 5px 0; color: var(--text-primary); font-weight: 600;">{volume_pcr:.2f}</p>
                 </div>
             </div>
             <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
@@ -1191,6 +1239,74 @@ def create_screener_summary_chart(df_results: pd.DataFrame) -> go.Figure:
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(26,35,50,0.8)',
         height=max(400, len(df_results) * 50),
+        showlegend=False
+    )
+    
+    return fig
+
+def create_volume_comparison_chart(df_results: pd.DataFrame) -> go.Figure:
+    """Volume comparison chart for screener"""
+    fig = go.Figure()
+    
+    # Call volume (positive)
+    fig.add_trace(go.Bar(
+        y=df_results['symbol'],
+        x=df_results['call_volume'],
+        orientation='h',
+        name='Call Volume',
+        marker_color='#10b981',
+        hovertemplate='%{y}<br>Call Vol: %{x:,.0f}<extra></extra>'
+    ))
+    
+    # Put volume (negative for visual separation)
+    fig.add_trace(go.Bar(
+        y=df_results['symbol'],
+        x=-df_results['put_volume'],
+        orientation='h',
+        name='Put Volume',
+        marker_color='#ef4444',
+        hovertemplate='%{y}<br>Put Vol: %{customdata:,.0f}<extra></extra>',
+        customdata=df_results['put_volume']
+    ))
+    
+    fig.update_layout(
+        title="<b>Call vs Put Volume Comparison</b>",
+        xaxis_title="Volume (Calls +ve | Puts -ve)",
+        yaxis_title="Stock",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=max(400, len(df_results) * 50),
+        barmode='overlay',
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    return fig
+
+def create_total_volume_chart(df_results: pd.DataFrame) -> go.Figure:
+    """Total volume chart for screener"""
+    df_sorted = df_results.sort_values('total_volume', ascending=True)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['symbol'],
+        x=df_sorted['total_volume'],
+        orientation='h',
+        name='Total Volume',
+        marker_color='#3b82f6',
+        hovertemplate='%{y}<br>Total Vol: %{x:,.0f}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title="<b>Total Options Volume</b>",
+        xaxis_title="Total Volume",
+        yaxis_title="Stock",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=max(400, len(df_sorted) * 50),
         showlegend=False
     )
     
@@ -1289,11 +1405,8 @@ def main():
             
             strikes = st.multiselect("Strikes",
                 ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3",
-                 "ATM+4", "ATM-4", "ATM+5", "ATM-5", "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8",
-                 "ATM+9", "ATM-9", "ATM+10", "ATM-10"],
-                default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3",
-                 "ATM+4", "ATM-4", "ATM+5", "ATM-5", "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8",
-                 "ATM+9", "ATM-9", "ATM+10", "ATM-10"])
+                 "ATM+4", "ATM-4", "ATM+5", "ATM-5"],
+                default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3"])
             
             interval = st.selectbox("Interval", options=["1", "5", "15", "60"],
                                    format_func=lambda x: {"1": "1 min", "5": "5 min", "15": "15 min", "60": "1 hour"}[x],
@@ -1332,7 +1445,14 @@ def main():
             st.markdown("#### Screener Filter")
             
             filter_type = st.radio("Filter Type",
-                ["🟢 Spot Above Gamma Flip", "🔴 Spot Below Gamma Flip", "🔵 All Stocks with Flip Zones"],
+                ["🟢 Spot Above Gamma Flip", 
+                 "🔴 Spot Below Gamma Flip", 
+                 "🔵 All Stocks with Flip Zones",
+                 "✅ NET GEX Positive",
+                 "❌ NET GEX Negative",
+                 "📊 High Volume (Top 10)",
+                 "📈 High Call Volume",
+                 "📉 High Put Volume"],
                 index=0)
             
             st.markdown("---")
@@ -1662,6 +1782,7 @@ def main():
                 st.error("No data available")
                 return
             
+            # Apply filters based on selected type
             if filter_type == "🟢 Spot Above Gamma Flip":
                 filtered_df = df_results[
                     df_results['flip_analysis'].apply(
@@ -1669,6 +1790,8 @@ def main():
                     )
                 ]
                 filter_key = 'above'
+                st.info("**Filter**: Stocks trading ABOVE gamma flip zones (bullish continuation/momentum)")
+                
             elif filter_type == "🔴 Spot Below Gamma Flip":
                 filtered_df = df_results[
                     df_results['flip_analysis'].apply(
@@ -1676,8 +1799,40 @@ def main():
                     )
                 ]
                 filter_key = 'below'
-            else:
+                st.info("**Filter**: Stocks trading BELOW gamma flip zones (bearish continuation/momentum)")
+                
+            elif filter_type == "🔵 All Stocks with Flip Zones":
                 filtered_df = df_results[df_results['flip_analysis'].apply(lambda x: x['has_flip_zones'])]
+                filter_key = 'all'
+                st.info("**Filter**: All stocks with detected gamma flip zones")
+                
+            elif filter_type == "✅ NET GEX Positive":
+                filtered_df = df_results[df_results['total_gex'] > 0]
+                filter_key = 'positive_gex'
+                st.info("**Filter**: Stocks with POSITIVE NET GEX (dealer suppression → lower volatility expected)")
+                
+            elif filter_type == "❌ NET GEX Negative":
+                filtered_df = df_results[df_results['total_gex'] < 0]
+                filter_key = 'negative_gex'
+                st.info("**Filter**: Stocks with NEGATIVE NET GEX (dealer amplification → higher volatility expected)")
+                
+            elif filter_type == "📊 High Volume (Top 10)":
+                filtered_df = df_results.nlargest(min(10, len(df_results)), 'total_volume')
+                filter_key = 'high_volume'
+                st.info("**Filter**: Top 10 stocks by total options volume (high activity)")
+                
+            elif filter_type == "📈 High Call Volume":
+                filtered_df = df_results.nlargest(min(10, len(df_results)), 'call_volume')
+                filter_key = 'high_call_volume'
+                st.info("**Filter**: Top 10 stocks by call volume (bullish options activity)")
+                
+            elif filter_type == "📉 High Put Volume":
+                filtered_df = df_results.nlargest(min(10, len(df_results)), 'put_volume')
+                filter_key = 'high_put_volume'
+                st.info("**Filter**: Top 10 stocks by put volume (bearish options activity)")
+                
+            else:
+                filtered_df = df_results
                 filter_key = 'all'
             
             st.session_state.screener_results = filtered_df
@@ -1691,10 +1846,25 @@ def main():
                 
                 st.markdown("---")
                 st.markdown("### 📈 Visual Comparison")
-                st.plotly_chart(create_screener_summary_chart(filtered_df), use_container_width=True)
+                
+                chart_tabs = st.tabs(["🎯 NET GEX", "📊 Volume Split", "📈 Total Volume"])
+                
+                with chart_tabs[0]:
+                    st.plotly_chart(create_screener_summary_chart(filtered_df), use_container_width=True)
+                    st.caption("**NET GEX**: Positive (green) = dealer suppression | Negative (red) = dealer amplification")
+                
+                with chart_tabs[1]:
+                    st.plotly_chart(create_volume_comparison_chart(filtered_df), use_container_width=True)
+                    st.caption("**Volume Split**: Call volume (green) vs Put volume (red)")
+                
+                with chart_tabs[2]:
+                    st.plotly_chart(create_total_volume_chart(filtered_df), use_container_width=True)
+                    st.caption("**Total Volume**: Combined call + put options activity")
                 
                 st.markdown("---")
-                export_data = filtered_df[['symbol', 'spot_price', 'total_gex', 'total_dex', 'pcr', 'timestamp']].copy()
+                export_data = filtered_df[['symbol', 'spot_price', 'total_gex', 'total_dex', 'pcr', 
+                                           'total_volume', 'call_volume', 'put_volume', 'volume_pcr', 
+                                           'timestamp']].copy()
                 export_data['flip_zones_count'] = filtered_df['flip_analysis'].apply(lambda x: x['flip_count'] if x['has_flip_zones'] else 0)
                 
                 csv = export_data.to_csv(index=False)
@@ -1710,14 +1880,25 @@ def main():
             
             **How to use:**
             1. Select stocks (presets or custom)
-            2. Choose filter (Above/Below/All flip zones)
+            2. Choose filter type
             3. Configure settings
             4. Click "Run Screener"
             
-            **Filters:**
-            - 🟢 **Above Flip**: Bullish continuation setups
-            - 🔴 **Below Flip**: Bearish continuation setups
+            **Filters Available:**
+            
+            **Gamma Flip Zone Filters:**
+            - 🟢 **Above Flip**: Bullish continuation setups (dealers amplify upward moves)
+            - 🔴 **Below Flip**: Bearish continuation setups (dealers amplify downward moves)
             - 🔵 **All Flip Zones**: All stocks with detected flip zones
+            
+            **NET GEX Filters:**
+            - ✅ **NET GEX Positive**: Dealer suppression → Lower volatility, mean reversion
+            - ❌ **NET GEX Negative**: Dealer amplification → Higher volatility, momentum
+            
+            **Volume Filters:**
+            - 📊 **High Volume (Top 10)**: Highest total options activity
+            - 📈 **High Call Volume**: Highest call buying (bullish sentiment)
+            - 📉 **High Put Volume**: Highest put buying (bearish sentiment)
             """)
     
     st.markdown("---")
