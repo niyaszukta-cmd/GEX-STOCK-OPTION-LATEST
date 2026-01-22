@@ -438,7 +438,7 @@ st.markdown("""
 @dataclass
 class DhanConfig:
     client_id: str = "1100480354"
-    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY4OTQyNzg1LCJhcHBfaWQiOiJjOTNkM2UwOSIsImlhdCI6MTc2ODg1NjM4NSwidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.AdqUgZIiiBun3Uc-JbMY7vCMih_cjF0BBvwo93243uM2ERW-yjugfoWMNagS_R6-CXY7FATbBnJFbdeMQAJG0g"
+    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY5MDY5NDMzLCJhcHBfaWQiOiJjOTNkM2UwOSIsImlhdCI6MTc2ODk4MzAzMywidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.1KED37cyhdeLN9U90tzN3ocxZLSB8Ao4ydERvap4eI8xAQq4PSfo8EvyjYYdBVPX4om3baMWj8-SMbGmMAIUmQ"
 
 DHAN_STOCK_SECURITY_IDS = {
     "RELIANCE": 2885, "TCS": 11536, "HDFCBANK": 1333, "INFY": 1594,
@@ -2849,11 +2849,6 @@ def main():
     
     # Main content
     if app_mode == "📊 Single Stock Analysis":
-        # [COMPLETE SINGLE STOCK ANALYSIS SECTION WITH ALL 13 TABS]
-        # This section continues with the FULL analysis dashboard
-        # Due to length constraints, I'll include a note that the complete 
-        # implementation includes all 13 tabs with all visualizations
-        
         # Store config
         if fetch_button:
             st.session_state.fetch_config = {
@@ -2866,21 +2861,614 @@ def main():
             }
             st.session_state.data_fetched = False
         
-        # [REST OF SINGLE STOCK ANALYSIS CODE CONTINUES HERE]
-        # Including: data fetching, time navigation, all 13 tabs with complete charts
-        # All features from indices dashboard merged here
+        # Fetch data if button clicked or if config changed
+        if 'fetch_config' in st.session_state and not st.session_state.get('data_fetched', False):
+            config = st.session_state.fetch_config
+            
+            with st.spinner("🔍 Fetching data with cache..."):
+                fetcher = DhanStockOptionsFetcher()
+                
+                try:
+                    df, metadata = fetcher.fetch_with_cache(
+                        cache_manager=cache_manager,
+                        symbol=config['symbol'],
+                        target_date=config['target_date'],
+                        strikes=config['strikes'],
+                        interval=config['interval'],
+                        expiry_code=config['expiry_code'],
+                        expiry_flag=config['expiry_flag']
+                    )
+                    
+                    if df is not None and len(df) > 0:
+                        st.session_state.df_data = df
+                        st.session_state.meta_data = metadata
+                        st.session_state.data_fetched = True
+                        st.session_state.timestamp_idx = 0
+                        
+                        cache_status = "✅ LOADED FROM CACHE" if metadata.get('from_cache', False) else "🆕 FETCHED FRESH"
+                        st.success(f"{cache_status} | {len(df)} records | {len(df['timestamp'].unique())} timestamps")
+                    else:
+                        st.error("No data received")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
         
-        # This is too long to include completely in one response
-        # The pattern continues with ALL tabs and features
+        # Display data if available
+        if st.session_state.get('data_fetched', False) and 'df_data' in st.session_state:
+            df = st.session_state.df_data
+            metadata = st.session_state.meta_data
+            
+            # Time navigation
+            unique_timestamps = sorted(df['timestamp'].unique())
+            
+            if len(unique_timestamps) > 0:
+                st.markdown("---")
+                st.markdown("### ⏰ Time Navigation")
+                
+                col1, col2, col3 = st.columns([2, 6, 2])
+                
+                with col1:
+                    if st.button("⏮️ First", use_container_width=True):
+                        st.session_state.timestamp_idx = 0
+                    if st.button("◀️ Prev", use_container_width=True):
+                        st.session_state.timestamp_idx = max(0, st.session_state.timestamp_idx - 1)
+                
+                with col2:
+                    st.session_state.timestamp_idx = st.slider(
+                        "Time",
+                        0,
+                        len(unique_timestamps) - 1,
+                        st.session_state.get('timestamp_idx', 0),
+                        format=f"{unique_timestamps[st.session_state.get('timestamp_idx', 0)].strftime('%H:%M:%S')}"
+                    )
+                
+                with col3:
+                    if st.button("Next ▶️", use_container_width=True):
+                        st.session_state.timestamp_idx = min(len(unique_timestamps) - 1, st.session_state.timestamp_idx + 1)
+                    if st.button("Last ⏭️", use_container_width=True):
+                        st.session_state.timestamp_idx = len(unique_timestamps) - 1
+                
+                current_timestamp = unique_timestamps[st.session_state.timestamp_idx]
+                df_current = df[df['timestamp'] == current_timestamp].copy()
+                
+                st.info(f"🕐 {current_timestamp.strftime('%Y-%m-%d %H:%M:%S')} IST | Record {st.session_state.timestamp_idx + 1}/{len(unique_timestamps)}")
+                
+                # Get spot price
+                spot_price = metadata.get('spot_price', df_current['spot'].iloc[0] if len(df_current) > 0 else 0)
+                
+                # Calculate all metrics
+                df_current = calculate_greeks(df_current, spot_price, is_index=False)
+                df_current = calculate_flows(df_current)
+                df_current = calculate_oi_based_gex(df_current)
+                df_current = calculate_predictive_models(df_current)
+                df_current = calculate_vanna_charm_scenarios(df_current, spot_price, is_index=False)
+                
+                # Aggregate metrics
+                metrics = aggregate_gex_dex_metrics(df_current)
+                
+                # Calculate flip zones
+                flip_zones = identify_gamma_flip_zones(df_current)
+                flip_position = analyze_flip_zone_position(spot_price, flip_zones)
+                
+                # Display key metrics
+                st.markdown("---")
+                col1, col2, col3, col4, col5 = st.columns(5)
+                
+                with col1:
+                    net_gex_cr = metrics['net_gex'] / 1e7
+                    gex_color = "green" if net_gex_cr > 0 else "red"
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, rgba({255 if net_gex_cr < 0 else 34}, {34 if net_gex_cr > 0 else 197}, {34 if net_gex_cr > 0 else 94}, 0.15), rgba({255 if net_gex_cr < 0 else 34}, {34 if net_gex_cr > 0 else 197}, {34 if net_gex_cr > 0 else 94}, 0.05)); 
+                                border: 2px solid rgba({255 if net_gex_cr < 0 else 34}, {34 if net_gex_cr > 0 else 197}, {34 if net_gex_cr > 0 else 94}, 0.3); border-radius: 12px; padding: 16px; text-align: center;'>
+                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>NET GEX</div>
+                        <div style='font-size: 1.5rem; font-weight: bold; color: {gex_color};'>₹{abs(net_gex_cr):.1f}Cr</div>
+                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{"🟢 BULLISH" if net_gex_cr > 0 else "🔴 BEARISH"}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    net_dex_cr = metrics['net_dex'] / 1e7
+                    dex_color = "green" if net_dex_cr > 0 else "red"
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, rgba({255 if net_dex_cr < 0 else 34}, {34 if net_dex_cr > 0 else 197}, {34 if net_dex_cr > 0 else 94}, 0.15), rgba({255 if net_dex_cr < 0 else 34}, {34 if net_dex_cr > 0 else 197}, {34 if net_dex_cr > 0 else 94}, 0.05)); 
+                                border: 2px solid rgba({255 if net_dex_cr < 0 else 34}, {34 if net_dex_cr > 0 else 197}, {34 if net_dex_cr > 0 else 94}, 0.3); border-radius: 12px; padding: 16px; text-align: center;'>
+                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>NET DEX</div>
+                        <div style='font-size: 1.5rem; font-weight: bold; color: {dex_color};'>₹{abs(net_dex_cr):.1f}Cr</div>
+                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{"📈 LONG" if net_dex_cr > 0 else "📉 SHORT"}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col3:
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.05)); 
+                                border: 2px solid rgba(59,130,246,0.3); border-radius: 12px; padding: 16px; text-align: center;'>
+                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>SPOT</div>
+                        <div style='font-size: 1.5rem; font-weight: bold; color: #3b82f6;'>₹{spot_price:.2f}</div>
+                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{metadata.get('symbol', 'STOCK')}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col4:
+                    pressure = metrics['hedging_pressure']
+                    pressure_color = "#22c55e" if pressure > 20 else ("#ef4444" if pressure < -20 else "#eab308")
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, rgba(234,179,8,0.15), rgba(234,179,8,0.05)); 
+                                border: 2px solid rgba(234,179,8,0.3); border-radius: 12px; padding: 16px; text-align: center;'>
+                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>PRESSURE</div>
+                        <div style='font-size: 1.5rem; font-weight: bold; color: {pressure_color};'>{pressure:+.1f}%</div>
+                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{"⚡ HIGH" if abs(pressure) > 40 else "📊 NORMAL"}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col5:
+                    flip_color = "#22c55e" if flip_position == "Above all flip zones" else ("#ef4444" if flip_position == "Below all flip zones" else "#eab308")
+                    flip_emoji = "🟢" if flip_position == "Above all flip zones" else ("🔴" if flip_position == "Below all flip zones" else "🟡")
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(168,85,247,0.05)); 
+                                border: 2px solid rgba(168,85,247,0.3); border-radius: 12px; padding: 16px; text-align: center;'>
+                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>FLIP ZONES</div>
+                        <div style='font-size: 1.5rem; font-weight: bold; color: {flip_color};'>{flip_emoji}</div>
+                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{len(flip_zones)} ZONES</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Tabs for detailed analysis
+                st.markdown("---")
+                
+                tabs = st.tabs([
+                    "📊 Overview",
+                    "📈 GEX Analysis", 
+                    "📉 DEX Analysis",
+                    "⚡ Flows",
+                    "🎯 OI Analysis",
+                    "🔮 VANNA",
+                    "⏱️ CHARM",
+                    "📊 Hedging",
+                    "🎨 Predictive",
+                    "📍 Support/Resistance",
+                    "📊 Volume Analysis",
+                    "🔄 Comparisons",
+                    "📋 Data Table"
+                ])
+                
+                with tabs[0]:  # Overview
+                    st.markdown("### 📊 Intraday Timeline")
+                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
+                    if len(df_timeline) > 0:
+                        fig = create_intraday_timeline(df_timeline, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.markdown("### 💾 Gamma Flip Zones")
+                    if len(flip_zones) > 0:
+                        for i, zone in enumerate(flip_zones[:5], 1):
+                            col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
+                            with col1:
+                                st.metric("Zone", f"#{i}")
+                            with col2:
+                                st.metric("Strike", f"₹{zone['strike']:.2f}")
+                            with col3:
+                                st.metric("Distance", f"{zone['distance_pct']:.2f}%")
+                            with col4:
+                                signal = "🟢 Above" if spot_price > zone['strike'] else "🔴 Below"
+                                st.metric("Position", signal)
+                    else:
+                        st.info("No gamma flip zones detected")
+                    
+                    st.markdown(f"**Position:** {flip_position}")
+                
+                with tabs[1]:  # GEX Analysis
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("### 📊 GEX with Flip Zones")
+                        fig = create_separate_gex_chart(df_current, metadata, flip_zones, spot_price)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("### 📊 GEX + DEX Combined")
+                        fig = create_net_gex_dex_chart(df_current, metadata, flip_zones, spot_price)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.markdown("### 📊 GEX Flow Over Time")
+                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
+                    if len(df_timeline) > 0:
+                        fig = create_gex_flow_chart(df_timeline, metadata, flip_zones, spot_price)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[2]:  # DEX Analysis
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("### 📊 Delta Exposure")
+                        fig = create_separate_dex_chart(df_current, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("### 📊 DEX Flow")
+                        df_timeline = df[df['timestamp'] <= current_timestamp].copy()
+                        if len(df_timeline) > 0:
+                            fig = create_dex_flow_chart(df_timeline, metadata)
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:  # Flows
+                    st.markdown("### ⚡ OI-Based GEX (Position Changes)")
+                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
+                    if len(df_timeline) > 0:
+                        fig = create_oi_based_gex_chart(df_timeline, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.markdown("### 📊 Original vs OI-Based GEX Comparison")
+                    fig = create_gex_overlay_chart(df_current, metadata)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[4]:  # OI Analysis
+                    st.markdown("### 📊 Open Interest Distribution")
+                    fig = create_oi_distribution(df_current, metadata, spot_price)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[5]:  # VANNA
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("### 🔮 VANNA Exposure")
+                        fig = create_vanna_exposure_chart(df_current, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("### 🔮 VANNA-Adjusted GEX")
+                        fig = create_vanna_adjusted_gex_chart(df_current, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[6]:  # CHARM
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("### ⏱️ CHARM Exposure")
+                        fig = create_charm_exposure_chart(df_current, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("### ⏱️ CHARM-Adjusted GEX")
+                        fig = create_charm_adjusted_gex_chart(df_current, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[7]:  # Hedging
+                    st.markdown("### 📊 Hedging Pressure")
+                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
+                    if len(df_timeline) > 0:
+                        fig = create_hedging_pressure_chart(df_timeline, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[8]:  # Predictive
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("### 📊 Volume-Weighted GEX")
+                        fig = create_volume_weighted_gex_chart(df_current, metadata)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("### 📍 Support/Resistance Strength")
+                        fig = create_support_resistance_strength_chart(df_current, metadata, spot_price)
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[9]:  # Support/Resistance
+                    st.markdown("### 📊 Strike-wise Metrics")
+                    
+                    summary_df = df_current.groupby('strike').agg({
+                        'call_gex': 'sum',
+                        'put_gex': 'sum',
+                        'call_dex': 'sum',
+                        'put_dex': 'sum',
+                        'call_oi': 'sum',
+                        'put_oi': 'sum',
+                        'support_resistance_strength': 'mean'
+                    }).reset_index()
+                    
+                    summary_df['net_gex'] = summary_df['call_gex'] - summary_df['put_gex']
+                    summary_df['net_dex'] = summary_df['call_dex'] - summary_df['put_dex']
+                    summary_df = summary_df.sort_values('strike')
+                    
+                    st.dataframe(summary_df.style.format({
+                        'strike': '₹{:.2f}',
+                        'call_gex': '₹{:.0f}',
+                        'put_gex': '₹{:.0f}',
+                        'net_gex': '₹{:.0f}',
+                        'call_dex': '₹{:.0f}',
+                        'put_dex': '₹{:.0f}',
+                        'net_dex': '₹{:.0f}',
+                        'call_oi': '{:.0f}',
+                        'put_oi': '{:.0f}',
+                        'support_resistance_strength': '{:.2f}'
+                    }), use_container_width=True)
+                
+                with tabs[10]:  # Volume Analysis
+                    st.markdown("### 📊 Call vs Put Volume")
+                    
+                    call_vol = df_current['call_volume'].sum()
+                    put_vol = df_current['put_volume'].sum()
+                    pcr = put_vol / call_vol if call_vol > 0 else 0
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Call Volume", f"{call_vol:,.0f}")
+                    with col2:
+                        st.metric("Put Volume", f"{put_vol:,.0f}")
+                    with col3:
+                        st.metric("PCR", f"{pcr:.2f}")
+                    
+                    # Volume by strike
+                    vol_df = df_current.groupby('strike').agg({
+                        'call_volume': 'sum',
+                        'put_volume': 'sum'
+                    }).reset_index().sort_values('strike')
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(x=vol_df['strike'], y=vol_df['call_volume'], 
+                                        name='Call Volume', marker_color='#22c55e'))
+                    fig.add_trace(go.Bar(x=vol_df['strike'], y=-vol_df['put_volume'], 
+                                        name='Put Volume', marker_color='#ef4444'))
+                    fig.add_vline(x=spot_price, line_dash="dash", line_color="#3b82f6", 
+                                 annotation_text="Spot", annotation_position="top")
+                    
+                    fig.update_layout(
+                        template="plotly_dark",
+                        barmode='relative',
+                        title="Volume Distribution by Strike",
+                        xaxis_title="Strike",
+                        yaxis_title="Volume",
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[11]:  # Comparisons
+                    st.markdown("### 📊 Multi-Metric Comparison")
+                    
+                    comparison_df = df_current.groupby('strike').agg({
+                        'call_gex': 'sum',
+                        'put_gex': 'sum',
+                        'call_oi_gex': 'sum',
+                        'put_oi_gex': 'sum',
+                        'volume_weighted_gex': 'mean'
+                    }).reset_index()
+                    
+                    comparison_df['net_gex'] = comparison_df['call_gex'] - comparison_df['put_gex']
+                    comparison_df['net_oi_gex'] = comparison_df['call_oi_gex'] - comparison_df['put_oi_gex']
+                    comparison_df = comparison_df.sort_values('strike')
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=comparison_df['strike'], y=comparison_df['net_gex']/1e7,
+                                           name='NET GEX', line=dict(color='#3b82f6', width=2)))
+                    fig.add_trace(go.Scatter(x=comparison_df['strike'], y=comparison_df['net_oi_gex']/1e7,
+                                           name='OI-Based GEX', line=dict(color='#8b5cf6', width=2)))
+                    fig.add_trace(go.Scatter(x=comparison_df['strike'], y=comparison_df['volume_weighted_gex']/1e7,
+                                           name='Vol-Weighted GEX', line=dict(color='#eab308', width=2)))
+                    fig.add_vline(x=spot_price, line_dash="dash", line_color="#22c55e")
+                    
+                    fig.update_layout(
+                        template="plotly_dark",
+                        title="GEX Variants Comparison",
+                        xaxis_title="Strike (₹)",
+                        yaxis_title="GEX (₹ Cr)",
+                        height=500
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[12]:  # Data Table
+                    st.markdown("### 📋 Complete Data Table")
+                    
+                    display_cols = ['strike', 'call_oi', 'call_volume', 'call_gex', 'call_dex', 
+                                   'put_oi', 'put_volume', 'put_gex', 'put_dex', 
+                                   'net_gex', 'net_dex', 'hedging_pressure']
+                    
+                    display_df = df_current[display_cols].copy()
+                    display_df = display_df.sort_values('strike')
+                    
+                    st.dataframe(display_df.style.format({
+                        'strike': '₹{:.2f}',
+                        'call_oi': '{:.0f}',
+                        'call_volume': '{:.0f}',
+                        'call_gex': '₹{:.0f}',
+                        'call_dex': '₹{:.0f}',
+                        'put_oi': '{:.0f}',
+                        'put_volume': '{:.0f}',
+                        'put_gex': '₹{:.0f}',
+                        'put_dex': '₹{:.0f}',
+                        'net_gex': '₹{:.0f}',
+                        'net_dex': '₹{:.0f}',
+                        'hedging_pressure': '{:.2f}%'
+                    }), use_container_width=True, height=600)
         
-        st.info("Complete analysis implementation continues here with all 13 tabs...")
-        
+        else:
+            st.info("👈 Configure settings in sidebar and click 'Fetch Data' to begin analysis")
+    
     else:
-        # SCREENER MODE (already complete above)
+        # SCREENER MODE
         if run_screener:
-            # [COMPLETE SCREENER IMPLEMENTATION]
-            # Already included above
-            st.info("Screener implementation continues here...")
+            st.markdown("### 🔍 Multi-Stock Screener Results")
+            
+            results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for idx, stock_symbol in enumerate(selected_stocks):
+                status_text.text(f"Screening {stock_symbol}... ({idx+1}/{len(selected_stocks)})")
+                progress_bar.progress((idx + 1) / len(selected_stocks))
+                
+                try:
+                    fetcher = DhanStockOptionsFetcher()
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    
+                    # Use ATM and nearby strikes for screening
+                    df, metadata = fetcher.fetch_with_cache(
+                        cache_manager=cache_manager,
+                        symbol=stock_symbol,
+                        target_date=today,
+                        strikes=strike_list,
+                        interval="15",
+                        expiry_code=expiry_code,
+                        expiry_flag=expiry_flag
+                    )
+                    
+                    if df is not None and len(df) > 0:
+                        # Get latest data
+                        latest_time = df['timestamp'].max()
+                        df_latest = df[df['timestamp'] == latest_time].copy()
+                        
+                        spot_price = metadata.get('spot_price', df_latest['spot'].iloc[0])
+                        
+                        # Calculate all metrics
+                        df_latest = calculate_greeks(df_latest, spot_price, is_index=False)
+                        df_latest = calculate_flows(df_latest)
+                        metrics = aggregate_gex_dex_metrics(df_latest)
+                        flip_zones = identify_gamma_flip_zones(df_latest)
+                        flip_position = analyze_flip_zone_position(spot_price, flip_zones)
+                        
+                        # Calculate additional metrics for screening
+                        call_vol = df_latest['call_volume'].sum()
+                        put_vol = df_latest['put_volume'].sum()
+                        total_vol = call_vol + put_vol
+                        pcr = put_vol / call_vol if call_vol > 0 else 0
+                        
+                        # Calculate gamma differential (OTM calls vs OTM puts)
+                        atm_strike = df_latest.iloc[(df_latest['strike'] - spot_price).abs().argsort()[:1]]['strike'].values[0]
+                        otm_calls = df_latest[df_latest['strike'] > atm_strike]['call_gex'].sum()
+                        otm_puts = df_latest[df_latest['strike'] < atm_strike]['put_gex'].sum()
+                        gamma_diff = otm_calls - otm_puts
+                        
+                        result = {
+                            'symbol': stock_symbol,
+                            'spot': spot_price,
+                            'net_gex': metrics['net_gex'],
+                            'net_dex': metrics['net_dex'],
+                            'call_gex': metrics['call_gex'],
+                            'put_gex': metrics['put_gex'],
+                            'hedging_pressure': metrics['hedging_pressure'],
+                            'flip_zones': len(flip_zones),
+                            'flip_position': flip_position,
+                            'call_volume': call_vol,
+                            'put_volume': put_vol,
+                            'total_volume': total_vol,
+                            'pcr': pcr,
+                            'gamma_differential': gamma_diff,
+                            'timestamp': latest_time
+                        }
+                        
+                        results.append(result)
+                
+                except Exception as e:
+                    st.warning(f"Error processing {stock_symbol}: {str(e)}")
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            if len(results) > 0:
+                results_df = pd.DataFrame(results)
+                
+                # Apply filters
+                filtered_df = results_df.copy()
+                
+                if filter_type == "🟢 Spot Above Gamma Flip":
+                    filtered_df = filtered_df[filtered_df['flip_position'] == "Above all flip zones"]
+                elif filter_type == "🔴 Spot Below Gamma Flip":
+                    filtered_df = filtered_df[filtered_df['flip_position'] == "Below all flip zones"]
+                elif filter_type == "🔵 All Stocks with Flip Zones":
+                    filtered_df = filtered_df[filtered_df['flip_zones'] > 0]
+                elif filter_type == "✅ NET GEX Positive":
+                    filtered_df = filtered_df[filtered_df['net_gex'] > 0]
+                elif filter_type == "❌ NET GEX Negative":
+                    filtered_df = filtered_df[filtered_df['net_gex'] < 0]
+                elif filter_type == "📊 High Volume (Top 10)":
+                    filtered_df = filtered_df.nlargest(10, 'total_volume')
+                elif filter_type == "📈 High Call Volume":
+                    filtered_df = filtered_df[filtered_df['call_volume'] > filtered_df['put_volume']]
+                    filtered_df = filtered_df.nlargest(10, 'call_volume')
+                elif filter_type == "📉 High Put Volume":
+                    filtered_df = filtered_df[filtered_df['put_volume'] > filtered_df['call_volume']]
+                    filtered_df = filtered_df.nlargest(10, 'put_volume')
+                elif filter_type == "⚡ Positive Gamma Differential":
+                    filtered_df = filtered_df[filtered_df['gamma_differential'] > 0]
+                elif filter_type == "⚡ Negative Gamma Differential":
+                    filtered_df = filtered_df[filtered_df['gamma_differential'] < 0]
+                
+                st.success(f"✅ Found {len(filtered_df)} stocks matching filter: **{filter_type}**")
+                
+                if len(filtered_df) > 0:
+                    # Display results as cards
+                    st.markdown("### 📊 Screener Results")
+                    
+                    # Sort by absolute net GEX
+                    filtered_df = filtered_df.sort_values('net_gex', key=abs, ascending=False)
+                    
+                    display_screener_results(filtered_df)
+                    
+                    # Visualization charts
+                    st.markdown("---")
+                    st.markdown("### 📊 Comparison Charts")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig = create_screener_summary_chart(filtered_df)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        fig = create_volume_comparison_chart(filtered_df)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig = create_total_volume_chart(filtered_df)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        fig = create_gamma_differential_chart(filtered_df)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Export functionality
+                    st.markdown("---")
+                    st.markdown("### 💾 Export Results")
+                    
+                    export_df = filtered_df.copy()
+                    export_df['net_gex_cr'] = export_df['net_gex'] / 1e7
+                    export_df['net_dex_cr'] = export_df['net_dex'] / 1e7
+                    export_df['call_gex_cr'] = export_df['call_gex'] / 1e7
+                    export_df['put_gex_cr'] = export_df['put_gex'] / 1e7
+                    
+                    csv = export_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Results (CSV)",
+                        data=csv,
+                        file_name=f"nyztrade_screener_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+                    # Data table
+                    st.markdown("---")
+                    st.markdown("### 📋 Detailed Data Table")
+                    
+                    display_cols = ['symbol', 'spot', 'net_gex_cr', 'net_dex_cr', 'hedging_pressure',
+                                   'flip_zones', 'call_volume', 'put_volume', 'pcr']
+                    
+                    st.dataframe(
+                        export_df[display_cols].style.format({
+                            'spot': '₹{:.2f}',
+                            'net_gex_cr': '₹{:.2f}Cr',
+                            'net_dex_cr': '₹{:.2f}Cr',
+                            'hedging_pressure': '{:+.1f}%',
+                            'flip_zones': '{:.0f}',
+                            'call_volume': '{:,.0f}',
+                            'put_volume': '{:,.0f}',
+                            'pcr': '{:.2f}'
+                        }),
+                        use_container_width=True,
+                        height=400
+                    )
+                
+                else:
+                    st.warning(f"No stocks found matching the filter: {filter_type}")
+            
+            else:
+                st.error("No data retrieved for any stocks")
+        
+        else:
+            st.info("👈 Configure settings in sidebar and click 'Run Screener' to start screening")
     
     st.markdown("---")
     st.markdown(f"""<div style="text-align: center; padding: 20px;">
