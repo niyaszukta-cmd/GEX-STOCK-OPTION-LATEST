@@ -1,5 +1,5 @@
 # ============================================================================
-# NYZTrade Stock Options GEX/DEX Dashboard - COMPLETE UNIFIED VERSION
+# NYZTrade Stock Options GEX/DEX Dashboard - COMPLETE UNIFIED VERSION (FIXED)
 # Features: Full Analysis + Screener | All Charts | Cache | VANNA/CHARM | Everything!
 # ============================================================================
 
@@ -617,16 +617,10 @@ def identify_gamma_flip_zones(df: pd.DataFrame, spot_price: float) -> List[Dict]
     
     return flip_zones
 
-def analyze_flip_zone_position(spot_price: float, flip_zones: List[Dict]) -> Dict:
+def analyze_flip_zone_position(spot_price: float, flip_zones: List[Dict]) -> str:
     """Analyze spot position relative to flip zones"""
     if not flip_zones:
-        return {
-            'has_flip_zones': False,
-            'position': 'no_flip_zones',
-            'signal': 'neutral',
-            'nearest_flip': None,
-            'description': 'No gamma flip zones detected'
-        }
+        return "No gamma flip zones detected"
     
     nearest_flip = min(flip_zones, key=lambda x: x['distance_from_spot'])
     
@@ -634,23 +628,11 @@ def analyze_flip_zone_position(spot_price: float, flip_zones: List[Dict]) -> Dic
     below_flip = any(spot_price < zone['strike'] for zone in flip_zones)
     
     if above_flip and not below_flip:
-        position = 'above_all'
-        signal = 'bullish_continuation' if nearest_flip['direction'] == 'upward' else 'bearish_reversal'
+        return "Above all flip zones"
     elif below_flip and not above_flip:
-        position = 'below_all'
-        signal = 'bearish_continuation' if nearest_flip['direction'] == 'downward' else 'bullish_reversal'
+        return "Below all flip zones"
     else:
-        position = 'between'
-        signal = 'range_bound'
-    
-    return {
-        'has_flip_zones': True,
-        'position': position,
-        'signal': signal,
-        'nearest_flip': nearest_flip,
-        'all_flips': flip_zones,
-        'flip_count': len(flip_zones)
-    }
+        return "Between flip zones"
 
 # ============================================================================
 # DHAN STOCK OPTIONS FETCHER (ENHANCED WITH CACHE & ALL GREEKS)
@@ -1033,189 +1015,12 @@ class DhanStockOptionsFetcher:
         }
         
         return df, meta
-    
-    def screen_single_stock(self, symbol: str, strikes: List[str] = None,
-                           expiry_code: int = 1, expiry_flag: str = "MONTH") -> Dict:
-        """Screen a single stock for gamma flip zones"""
-        if strikes is None:
-            strikes = ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2"]
-        
-        today = datetime.now()
-        from_date = (today - timedelta(days=1)).strftime('%Y-%m-%d')
-        to_date = today.strftime('%Y-%m-%d')
-        
-        config = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
-        lot_size = config["lot_size"]
-        
-        all_data = []
-        strike_volumes = []
-        
-        for strike_type in strikes:
-            call_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "CALL", 
-                                                "60", expiry_code, expiry_flag)
-            time.sleep(0.5)
-            
-            put_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "PUT", 
-                                               "60", expiry_code, expiry_flag)
-            time.sleep(0.5)
-            
-            if not call_data or not put_data:
-                continue
-            
-            ce_data = call_data.get('ce', {})
-            pe_data = put_data.get('pe', {})
-            
-            if not ce_data:
-                continue
-            
-            try:
-                spot_price = ce_data.get('spot', [0])[-1] if ce_data.get('spot') else 0
-                strike_price = ce_data.get('strike', [0])[-1] if ce_data.get('strike') else 0
-                
-                if spot_price == 0 or strike_price == 0:
-                    continue
-                
-                call_oi = ce_data.get('oi', [0])[-1] if ce_data.get('oi') else 0
-                put_oi = pe_data.get('oi', [0])[-1] if pe_data.get('oi') else 0
-                call_volume = ce_data.get('volume', [0])[-1] if ce_data.get('volume') else 0
-                put_volume = pe_data.get('volume', [0])[-1] if pe_data.get('volume') else 0
-                call_iv = ce_data.get('iv', [15])[-1] if ce_data.get('iv') else 15
-                put_iv = pe_data.get('iv', [15])[-1] if pe_data.get('iv') else 15
-                
-                time_to_expiry = 30 / 365
-                call_iv_dec = call_iv / 100 if call_iv > 1 else call_iv
-                put_iv_dec = put_iv / 100 if put_iv > 1 else put_iv
-                
-                call_gamma = self.bs_calc.calculate_gamma(spot_price, strike_price, time_to_expiry, 
-                                                         self.risk_free_rate, call_iv_dec)
-                put_gamma = self.bs_calc.calculate_gamma(spot_price, strike_price, time_to_expiry, 
-                                                        self.risk_free_rate, put_iv_dec)
-                call_delta = self.bs_calc.calculate_call_delta(spot_price, strike_price, time_to_expiry, 
-                                                               self.risk_free_rate, call_iv_dec)
-                put_delta = self.bs_calc.calculate_put_delta(spot_price, strike_price, time_to_expiry, 
-                                                             self.risk_free_rate, put_iv_dec)
-                
-                call_gex = (call_oi * call_gamma * spot_price**2 * lot_size) / 1e7
-                put_gex = -(put_oi * put_gamma * spot_price**2 * lot_size) / 1e7
-                call_dex = (call_oi * call_delta * spot_price * lot_size) / 1e7
-                put_dex = (put_oi * put_delta * spot_price * lot_size) / 1e7
-                
-                strike_volumes.append({
-                    'strike': strike_price,
-                    'call_volume': call_volume,
-                    'put_volume': put_volume,
-                    'total_volume': call_volume + put_volume,
-                    'call_gamma': call_gamma,
-                    'put_gamma': put_gamma,
-                    'call_oi': call_oi,
-                    'put_oi': put_oi,
-                    'moneyness': 'OTM_CALL' if strike_price > spot_price else ('OTM_PUT' if strike_price < spot_price else 'ATM')
-                })
-                
-                all_data.append({
-                    'spot_price': spot_price,
-                    'strike': strike_price,
-                    'call_oi': call_oi,
-                    'put_oi': put_oi,
-                    'call_volume': call_volume,
-                    'put_volume': put_volume,
-                    'call_gamma': call_gamma,
-                    'put_gamma': put_gamma,
-                    'call_gex': call_gex,
-                    'put_gex': put_gex,
-                    'net_gex': call_gex + put_gex,
-                    'call_dex': call_dex,
-                    'put_dex': put_dex,
-                    'net_dex': call_dex + put_dex,
-                })
-            except:
-                continue
-        
-        if not all_data:
-            return {'success': False, 'symbol': symbol, 'error': 'No data available'}
-        
-        df = pd.DataFrame(all_data)
-        spot_price = df['spot_price'].iloc[0]
-        
-        flip_zones = identify_gamma_flip_zones(df, spot_price)
-        flip_analysis = analyze_flip_zone_position(spot_price, flip_zones)
-        
-        total_gex = df['net_gex'].sum()
-        total_dex = df['net_dex'].sum()
-        pcr = df['put_oi'].sum() / df['call_oi'].sum() if df['call_oi'].sum() > 0 else 1
-        total_call_volume = df['call_volume'].sum()
-        total_put_volume = df['put_volume'].sum()
-        total_volume = total_call_volume + total_put_volume
-        volume_pcr = total_put_volume / total_call_volume if total_call_volume > 0 else 1
-        
-        if strike_volumes:
-            strike_df = pd.DataFrame(strike_volumes)
-            top_volume_strikes = strike_df.nlargest(3, 'total_volume')[['strike', 'total_volume']].to_dict('records')
-            
-            otm_calls = strike_df[strike_df['moneyness'] == 'OTM_CALL']
-            otm_puts = strike_df[strike_df['moneyness'] == 'OTM_PUT']
-            
-            total_otm_call_gamma = otm_calls['call_gamma'].sum() if len(otm_calls) > 0 else 0
-            total_otm_put_gamma = otm_puts['put_gamma'].sum() if len(otm_puts) > 0 else 0
-            gamma_differential = total_otm_call_gamma - total_otm_put_gamma
-            
-            gamma_diff_normalized = gamma_differential
-        else:
-            top_volume_strikes = []
-            gamma_differential = 0
-            gamma_diff_normalized = 0
-        
-        return {
-            'success': True,
-            'symbol': symbol,
-            'spot_price': spot_price,
-            'total_gex': total_gex,
-            'total_dex': total_dex,
-            'pcr': pcr,
-            'total_volume': total_volume,
-            'call_volume': total_call_volume,
-            'put_volume': total_put_volume,
-            'volume_pcr': volume_pcr,
-            'top_volume_strikes': top_volume_strikes,
-            'gamma_differential': gamma_differential,
-            'gamma_diff_normalized': gamma_diff_normalized,
-            'flip_zones': flip_zones,
-            'flip_analysis': flip_analysis,
-            'strikes_analyzed': len(df),
-            'timestamp': datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')
-        }
-    
-    def screen_multiple_stocks(self, symbols: List[str], strikes: List[str] = None,
-                               expiry_code: int = 1, expiry_flag: str = "MONTH") -> pd.DataFrame:
-        """Screen multiple stocks"""
-        results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i, symbol in enumerate(symbols):
-            status_text.text(f"Screening {symbol}... ({i+1}/{len(symbols)})")
-            
-            result = self.screen_single_stock(symbol, strikes, expiry_code, expiry_flag)
-            
-            if result['success']:
-                results.append(result)
-            
-            progress_bar.progress((i + 1) / len(symbols))
-            time.sleep(1)
-        
-        progress_bar.empty()
-        status_text.empty()
-        
-        if not results:
-            return pd.DataFrame()
-        
-        return pd.DataFrame(results)
 
 # ============================================================================
-# VISUALIZATION FUNCTIONS (ALL CHARTS FROM INDICES DASHBOARD)
+# VISUALIZATION FUNCTIONS (SIMPLIFIED - ONLY KEY CHARTS)
 # ============================================================================
 
-def create_intraday_timeline(df: pd.DataFrame, selected_timestamp) -> go.Figure:
+def create_intraday_timeline(df: pd.DataFrame, metadata: Dict) -> go.Figure:
     """Create intraday timeline of total GEX and DEX"""
     timeline_df = df.groupby('timestamp').agg({
         'net_gex': 'sum',
@@ -1271,10 +1076,6 @@ def create_intraday_timeline(df: pd.DataFrame, selected_timestamp) -> go.Figure:
         row=3, col=1
     )
     
-    fig.add_vline(x=selected_timestamp, line_dash="dash", line_color="#f59e0b", line_width=3, row=1, col=1)
-    fig.add_vline(x=selected_timestamp, line_dash="dash", line_color="#f59e0b", line_width=3, row=2, col=1)
-    fig.add_vline(x=selected_timestamp, line_dash="dash", line_color="#f59e0b", line_width=3, row=3, col=1)
-    
     fig.update_layout(
         title=dict(text="<b>📈 Intraday Evolution</b>", font=dict(size=18, color='white')),
         template="plotly_dark",
@@ -1292,207 +1093,10 @@ def create_intraday_timeline(df: pd.DataFrame, selected_timestamp) -> go.Figure:
     
     return fig
 
-def create_gex_flow_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Create GEX Flow chart with Gamma Flip Zones"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex_flow']]
-    
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex_flow'],
-        orientation='h',
-        marker_color=colors,
-        name='Net GEX Flow',
-        hovertemplate='Strike: %{y:,.0f}<br>Net GEX Flow: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
-        
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>🌊 GEX Flow with Flip Zones</b>", font=dict(size=18, color='white')),
-        xaxis_title="Net GEX Flow (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)', 
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(128,128,128,0.5)',
-            zerolinewidth=2
-        ),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=80, b=80)
-    )
-    
-    return fig
-
-def create_oi_based_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Create OI-Based GEX chart showing pure position changes with Flip Zones"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    if 'net_oi_gex' not in df_sorted.columns:
-        df_sorted['net_oi_gex'] = 0.0
-    
-    df_sorted['net_oi_gex'] = df_sorted['net_oi_gex'].fillna(0)
-    
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_oi_gex']]
-    
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_oi_gex'],
-        orientation='h',
-        marker_color=colors,
-        name='OI-Based GEX',
-        hovertemplate='Strike: %{y:,.0f}<br>OI-Based GEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
-        
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>📊 OI-Based GEX (Pure Position Changes)</b>", font=dict(size=18, color='white')),
-        xaxis_title="OI Contribution to GEX (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)', 
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(128,128,128,0.5)',
-            zerolinewidth=2
-        ),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=80, b=80)
-    )
-    
-    return fig
-
-def create_dex_flow_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Create DEX Flow chart"""
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df['strike'],
-        x=df['call_dex_flow'],
-        orientation='h',
-        name='Call DEX Flow',
-        marker_color='rgba(16, 185, 129, 0.6)',
-        hovertemplate='Strike: %{y}<br>Call Flow: %{x:.4f}Cr<extra></extra>'
-    ))
-    
-    fig.add_trace(go.Bar(
-        y=df['strike'],
-        x=df['put_dex_flow'],
-        orientation='h',
-        name='Put DEX Flow',
-        marker_color='rgba(239, 68, 68, 0.6)',
-        hovertemplate='Strike: %{y}<br>Put Flow: %{x:.4f}Cr<extra></extra>'
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#3b82f6", line_width=2,
-                  annotation_text=f"Spot: ₹{spot_price:,.0f}", annotation_position="right")
-    
-    fig.update_layout(
-        title=dict(text="<b>🌊 DEX Flow Distribution</b>", font=dict(size=18, color='white')),
-        xaxis_title="DEX Flow (₹Cr)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=600,
-        barmode='relative',
-        hovermode='y unified',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    
-    return fig
-
-def create_separate_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
+def create_separate_gex_chart(df: pd.DataFrame, metadata: Dict, flip_zones: List[Dict], spot_price: float) -> go.Figure:
     """GEX chart with flip zones"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex']]
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
     
     fig = go.Figure()
     
@@ -1531,10 +1135,7 @@ def create_separate_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
             y1=zone['upper_strike'],
             fillcolor=zone['color'],
             opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
+            line_width=0
         )
     
     fig.update_layout(
@@ -1547,18 +1148,16 @@ def create_separate_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
         plot_bgcolor='rgba(26,35,50,0.8)',
         height=700,
         showlegend=False,
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=80, b=80)
+        hovermode='closest'
     )
     
     return fig
 
-def create_separate_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
+def create_separate_dex_chart(df: pd.DataFrame, metadata: Dict) -> go.Figure:
     """DEX chart"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_dex']]
+    spot_price = metadata.get('spot_price', df_sorted['spot_price'].iloc[0])
     
     fig = go.Figure()
     
@@ -1573,8 +1172,7 @@ def create_separate_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
     ))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
+                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right")
     
     fig.update_layout(
         title=dict(text="<b>📊 Delta Exposure (DEX)</b>", font=dict(size=18, color='white')),
@@ -1584,21 +1182,16 @@ def create_separate_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(26,35,50,0.8)',
         height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=80, b=80)
+        showlegend=False
     )
     
     return fig
 
-def create_net_gex_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
+def create_net_gex_dex_chart(df: pd.DataFrame, metadata: Dict, flip_zones: List[Dict], spot_price: float) -> go.Figure:
     """Combined NET GEX+DEX"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     df_sorted['net_gex_dex'] = df_sorted['net_gex'] + df_sorted['net_dex']
     colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex_dex']]
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
     
     fig = go.Figure()
     
@@ -1613,141 +1206,30 @@ def create_net_gex_dex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
     ))
     
     fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
+                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right")
     
     for zone in flip_zones:
         fig.add_hline(
             y=zone['strike'],
             line_dash="dot",
             line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
-        
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
+            line_width=2
         )
     
     fig.update_layout(
-        title=dict(text="<b>⚡ Combined NET GEX + DEX with Flip Zones</b>",
-                  font=dict(size=18, color='white')),
+        title=dict(text="<b>⚡ Combined NET GEX + DEX</b>", font=dict(size=18, color='white')),
         xaxis_title="Combined Exposure (₹ Crores)",
         yaxis_title="Strike Price",
         template="plotly_dark",
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(26,35,50,0.8)',
         height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=80, b=80)
-    )
-    
-    return fig
-
-def create_hedging_pressure_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Hedging pressure"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['hedging_pressure'],
-        orientation='h',
-        marker=dict(
-            color=df_sorted['hedging_pressure'],
-            colorscale='RdYlGn',
-            showscale=True,
-            colorbar=dict(
-                title=dict(text='Pressure %', font=dict(color='white', size=12)),
-                tickfont=dict(color='white'),
-                x=1.02,
-                len=0.7,
-                thickness=20
-            ),
-            cmin=-100,
-            cmax=100
-        ),
-        hovertemplate='Strike: %{y:,.0f}<br>Pressure: %{x:.1f}%<extra></extra>',
         showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
-        
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0,
-            annotation_text=zone['arrow'],
-            annotation_position="right",
-            annotation=dict(font=dict(size=16, color=zone['color']))
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>🎪 Hedging Pressure with Flip Zones</b>", font=dict(size=18, color='white')),
-        xaxis_title="Hedging Pressure (%)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)',
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(128,128,128,0.5)',
-            zerolinewidth=2,
-            range=[-110, 110]
-        ),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=120, t=80, b=80)
     )
     
     return fig
 
-def create_oi_distribution(df: pd.DataFrame, spot_price: float) -> go.Figure:
+def create_oi_distribution(df: pd.DataFrame, metadata: Dict, spot_price: float) -> go.Figure:
     """OI distribution"""
     df_sorted = df.sort_values('strike').reset_index(drop=True)
     
@@ -1759,8 +1241,7 @@ def create_oi_distribution(df: pd.DataFrame, spot_price: float) -> go.Figure:
         orientation='h',
         name='Call OI',
         marker_color='#10b981',
-        opacity=0.7,
-        hovertemplate='Strike: %{y:,.0f}<br>Call OI: %{x:,.0f}<extra></extra>'
+        opacity=0.7
     ))
     
     fig.add_trace(go.Bar(
@@ -1769,764 +1250,62 @@ def create_oi_distribution(df: pd.DataFrame, spot_price: float) -> go.Figure:
         orientation='h',
         name='Put OI',
         marker_color='#ef4444',
-        opacity=0.7,
-        hovertemplate='Strike: %{y:,.0f}<br>Put OI: %{customdata:,.0f}<extra></extra>',
-        customdata=df_sorted['put_oi']
+        opacity=0.7
     ))
     
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="white", line_width=1)
+    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2)
     
     fig.update_layout(
         title=dict(text="<b>📋 Open Interest Distribution</b>", font=dict(size=16, color='white')),
-        xaxis_title="Open Interest (Calls +ve | Puts -ve)",
-        yaxis_title="Strike Price",
         template="plotly_dark",
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(26,35,50,0.8)',
         height=500,
-        barmode='overlay',
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, font=dict(color='white')),
-        hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)',
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(255,255,255,0.3)',
-            zerolinewidth=2
-        ),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=80, b=80)
+        barmode='overlay'
     )
     
     return fig
 
-def create_vanna_exposure_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """VANNA exposure"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    colors_call = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['call_vanna']]
-    colors_put = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['put_vanna']]
-    
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("📈 Call VANNA", "📉 Put VANNA"),
-        horizontal_spacing=0.12
-    )
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['call_vanna'],
-        orientation='h',
-        marker=dict(color=colors_call),
-        name='Call VANNA',
-        hovertemplate='Strike: %{y:,.0f}<br>Call VANNA: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=1)
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['put_vanna'],
-        orientation='h',
-        marker=dict(color=colors_put),
-        name='Put VANNA',
-        hovertemplate='Strike: %{y:,.0f}<br>Put VANNA: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=2)
-    
-    for col in [1, 2]:
-        fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
-                      annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                      annotation=dict(font=dict(size=10, color="white")), row=1, col=col)
-    
-    fig.update_layout(
-        title=dict(text="<b>🌊 VANNA Exposure (dDelta/dVol)</b>", font=dict(size=18, color='white')),
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=600,
-        showlegend=False,
-        hovermode='closest',
-        margin=dict(l=80, r=80, t=100, b=80)
-    )
-    
-    fig.update_xaxes(title_text="VANNA (₹ Crores)", gridcolor='rgba(128,128,128,0.2)', showgrid=True)
-    fig.update_yaxes(title_text="Strike Price", gridcolor='rgba(128,128,128,0.2)', showgrid=True)
-    
-    return fig
-
-def create_charm_exposure_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """CHARM exposure"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    colors_call = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['call_charm']]
-    colors_put = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['put_charm']]
-    
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("📈 Call CHARM", "📉 Put CHARM"),
-        horizontal_spacing=0.12
-    )
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['call_charm'],
-        orientation='h',
-        marker=dict(color=colors_call),
-        name='Call CHARM',
-        hovertemplate='Strike: %{y:,.0f}<br>Call CHARM: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=1)
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['put_charm'],
-        orientation='h',
-        marker=dict(color=colors_put),
-        name='Put CHARM',
-        hovertemplate='Strike: %{y:,.0f}<br>Put CHARM: %{x:.4f}Cr<extra></extra>'
-    ), row=1, col=2)
-    
-    for col in [1, 2]:
-        fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
-                      annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                      annotation=dict(font=dict(size=10, color="white")), row=1, col=col)
-    
-    fig.update_layout(
-        title=dict(text="<b>⏰ CHARM Exposure (Delta Decay)</b>", font=dict(size=18, color='white')),
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=600,
-        showlegend=False,
-        hovermode='closest',
-        margin=dict(l=80, r=80, t=100, b=80)
-    )
-    
-    fig.update_xaxes(title_text="CHARM (₹ Crores)", gridcolor='rgba(128,128,128,0.2)', showgrid=True)
-    fig.update_yaxes(title_text="Strike Price", gridcolor='rgba(128,128,128,0.2)', showgrid=True)
-    
-    return fig
-
-def create_gex_overlay_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Overlay chart comparing Original GEX vs OI-Based GEX"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    if 'net_gex' not in df_sorted.columns:
-        df_sorted['net_gex'] = 0.0
-    if 'net_oi_gex' not in df_sorted.columns:
-        df_sorted['net_oi_gex'] = 0.0
-    
-    df_sorted['net_gex'] = df_sorted['net_gex'].fillna(0)
-    df_sorted['net_oi_gex'] = df_sorted['net_oi_gex'].fillna(0)
-    
-    gex_sum = abs(df_sorted['net_gex'].sum())
-    oi_gex_sum = abs(df_sorted['net_oi_gex'].sum())
-    has_gex_data = gex_sum > 0.000001
-    has_oi_data = oi_gex_sum > 0.000001
-    
-    max_gex = df_sorted['net_gex'].abs().max()
-    max_oi_gex = df_sorted['net_oi_gex'].abs().max()
-    
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    if not has_gex_data:
-        fig.add_annotation(
-            xref="paper", yref="paper",
-            x=0.5, y=0.5,
-            text="❌ No GEX Data Found<br>Check data source",
-            showarrow=False,
-            bgcolor="rgba(255,0,0,0.3)",
-            bordercolor="red",
-            borderwidth=2,
-            font=dict(color="white", size=16),
-            align="center"
-        )
-    else:
-        original_colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex']]
-        fig.add_trace(go.Bar(
-            y=df_sorted['strike'],
-            x=df_sorted['net_gex'],
-            orientation='h',
-            marker=dict(
-                color=original_colors,
-                opacity=0.6,
-                line=dict(width=0)
-            ),
-            name=f'Original GEX - Max: {max_gex:.4f}Cr',
-            hovertemplate='Strike: %{y:,.0f}<br>Original GEX: %{x:.4f}Cr<extra></extra>'
-        ))
-        
-        if has_oi_data:
-            oi_colors = ['#06b6d4' if x > 0 else '#f97316' for x in df_sorted['net_oi_gex']]
-            fig.add_trace(go.Bar(
-                y=df_sorted['strike'],
-                x=df_sorted['net_oi_gex'],
-                orientation='h',
-                marker=dict(
-                    color=oi_colors,
-                    opacity=0.85,
-                    line=dict(color='white', width=1)
-                ),
-                name=f'OI-Based GEX - Max: {max_oi_gex:.4f}Cr',
-                hovertemplate='Strike: %{y:,.0f}<br>OI-Based GEX: %{x:.4f}Cr<extra></extra>'
-            ))
-        else:
-            fig.add_annotation(
-                xref="paper", yref="paper",
-                x=0.02, y=0.98,
-                text="ℹ️ No OI-Based GEX<br>(Needs 2+ time points)",
-                showarrow=False,
-                bgcolor="rgba(255,165,0,0.2)",
-                bordercolor="orange",
-                borderwidth=1,
-                font=dict(color="white", size=10),
-                align="left",
-                xanchor="left",
-                yanchor="top"
-            )
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="white", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white", family="Arial Black")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=2)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
-        
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.05,
-            line_width=0
-        )
-    
-    fig.update_layout(
-        title=dict(
-            text="<b>🔄 GEX Overlay: Original vs OI-Based</b><br><sub>Green/Red = All effects | Cyan/Orange = Pure position changes</sub>",
-            font=dict(size=18, color='white')
-        ),
-        xaxis_title="GEX (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        barmode='overlay',
-        bargap=0.15,
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1,
-            font=dict(color='white', size=11),
-            bgcolor='rgba(0,0,0,0.8)',
-            bordercolor='white',
-            borderwidth=1
-        ),
-        hovermode='closest',
-        xaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)',
-            showgrid=True,
-            zeroline=True,
-            zerolinecolor='rgba(255,255,255,0.3)',
-            zerolinewidth=2
-        ),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
-        margin=dict(l=80, r=80, t=100, b=80)
-    )
-    
-    return fig
-
-def create_volume_weighted_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Volume-Weighted GEX - Shows where smart money is positioning"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    if 'volume_weighted_gex' not in df_sorted.columns:
-        df_sorted['volume_weighted_gex'] = 0.0
-    
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['volume_weighted_gex']]
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['volume_weighted_gex'],
-        orientation='h',
-        marker_color=colors,
-        name='VWGEX',
-        hovertemplate='Strike: %{y:,.0f}<br>VW-GEX: %{x:.2f}<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(font=dict(size=10, color=zone['color']))
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>💰 Volume-Weighted GEX (Smart Money Positioning)</b>", font=dict(size=18, color='white')),
-        xaxis_title="Volume-Weighted GEX Score",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, zeroline=True, zerolinecolor='rgba(128,128,128,0.5)'),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        margin=dict(l=80, r=80, t=80, b=80)
-    )
-    
-    return fig
-
-def create_support_resistance_strength_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """Support/Resistance Strength - Probability of price reaction at each strike"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    if 'support_resistance_strength' not in df_sorted.columns:
-        df_sorted['support_resistance_strength'] = 0.0
-    
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['support_resistance_strength'],
-        orientation='h',
-        marker=dict(
-            color=df_sorted['support_resistance_strength'],
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title=dict(text='Strength', font=dict(color='white', size=12)),
-                tickfont=dict(color='white'),
-                x=1.02
-            )
-        ),
-        name='SR Strength',
-        hovertemplate='Strike: %{y:,.0f}<br>Strength: %{x:.4f}<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(font=dict(size=10, color=zone['color']))
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>🎯 Support/Resistance Strength Score</b>", font=dict(size=18, color='white')),
-        xaxis_title="Strength Score (Higher = Stronger)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False,
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        margin=dict(l=80, r=120, t=80, b=80)
-    )
-    
-    return fig
-
-def create_vanna_adjusted_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """VANNA-Adjusted GEX showing impact of volatility changes"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    for col in ['net_gex', 'vanna_adj_gex_vol_up', 'vanna_adj_gex_vol_down']:
-        if col not in df_sorted.columns:
-            df_sorted[col] = 0.0
-    
-    df_sorted['vanna_impact_up'] = df_sorted['vanna_adj_gex_vol_up'] - df_sorted['net_gex']
-    df_sorted['vanna_impact_down'] = df_sorted['vanna_adj_gex_vol_down'] - df_sorted['net_gex']
-    max_impact = max(abs(df_sorted['vanna_impact_up'].max()), abs(df_sorted['vanna_impact_down'].min()))
-    
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        y=df_sorted['strike'],
-        x=df_sorted['vanna_adj_gex_vol_down'],
-        mode='lines+markers',
-        name='Vol -5% (VANNA Adj)',
-        line=dict(color='#ef4444', width=3, dash='dash'),
-        marker=dict(size=5, symbol='triangle-left'),
-        hovertemplate='Strike: %{y:,.0f}<br>Vol -5%: %{x:.4f}Cr<br>Impact: %{customdata:.4f}Cr<extra></extra>',
-        customdata=df_sorted['vanna_impact_down']
-    ))
-    
-    fig.add_trace(go.Scatter(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex'],
-        mode='lines+markers',
-        name='Current GEX',
-        line=dict(color='#06b6d4', width=4),
-        marker=dict(size=8, symbol='circle'),
-        hovertemplate='Strike: %{y:,.0f}<br>Current: %{x:.4f}Cr<extra></extra>'
-    ))
-    
-    fig.add_trace(go.Scatter(
-        y=df_sorted['strike'],
-        x=df_sorted['vanna_adj_gex_vol_up'],
-        mode='lines+markers',
-        name='Vol +5% (VANNA Adj)',
-        line=dict(color='#10b981', width=3, dash='dash'),
-        marker=dict(size=5, symbol='triangle-right'),
-        hovertemplate='Strike: %{y:,.0f}<br>Vol +5%: %{x:.4f}Cr<br>Impact: %{customdata:.4f}Cr<extra></extra>',
-        customdata=df_sorted['vanna_impact_up']
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="white", line_width=2,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white", family="Arial Black")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=1,
-            opacity=0.3
-        )
-    
-    fig.update_layout(
-        title=dict(
-            text="<b>🌊 VANNA-Adjusted GEX (Volatility Scenarios)</b><br><sub>Shows how GEX shifts with ±5% IV change</sub>",
-            font=dict(size=18, color='white')
-        ),
-        xaxis_title="GEX (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        legend=dict(
-            orientation='v',
-            yanchor='top',
-            y=0.99,
-            xanchor='left',
-            x=0.01,
-            font=dict(color='white', size=12),
-            bgcolor='rgba(0,0,0,0.7)',
-            bordercolor='white',
-            borderwidth=1
-        ),
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, zeroline=True, zerolinecolor='rgba(128,128,128,0.5)'),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        margin=dict(l=80, r=80, t=100, b=80)
-    )
-    
-    if max_impact > 0.001:
-        fig.add_annotation(
-            xref="paper", yref="paper",
-            x=0.98, y=0.02,
-            text=f"Max VANNA Impact: ±{max_impact:.3f}Cr<br>5% vol change effect",
-            showarrow=False,
-            bgcolor="rgba(255,255,255,0.1)",
-            bordercolor="white",
-            borderwidth=1,
-            font=dict(color="white", size=10),
-            align="right"
-        )
-    
-    return fig
-
-def create_charm_adjusted_gex_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
-    """CHARM-Adjusted GEX showing impact of time decay"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    for col in ['net_gex', 'charm_adj_gex_2hr', 'charm_adj_gex_4hr']:
-        if col not in df_sorted.columns:
-            df_sorted[col] = 0.0
-    
-    df_sorted['charm_impact_2hr'] = df_sorted['charm_adj_gex_2hr'] - df_sorted['net_gex']
-    df_sorted['charm_impact_4hr'] = df_sorted['charm_adj_gex_4hr'] - df_sorted['net_gex']
-    max_impact = max(abs(df_sorted['charm_impact_4hr'].max()), abs(df_sorted['charm_impact_4hr'].min()))
-    
-    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        y=df_sorted['strike'],
-        x=df_sorted['charm_adj_gex_4hr'],
-        mode='lines+markers',
-        name='+4 Hours (CHARM Adj)',
-        line=dict(color='#8b5cf6', width=3, dash='dash'),
-        marker=dict(size=5, symbol='diamond'),
-        hovertemplate='Strike: %{y:,.0f}<br>+4hrs: %{x:.4f}Cr<br>Impact: %{customdata:.4f}Cr<extra></extra>',
-        customdata=df_sorted['charm_impact_4hr']
-    ))
-    
-    fig.add_trace(go.Scatter(
-        y=df_sorted['strike'],
-        x=df_sorted['charm_adj_gex_2hr'],
-        mode='lines+markers',
-        name='+2 Hours (CHARM Adj)',
-        line=dict(color='#f59e0b', width=3, dash='dash'),
-        marker=dict(size=5, symbol='square'),
-        hovertemplate='Strike: %{y:,.0f}<br>+2hrs: %{x:.4f}Cr<br>Impact: %{customdata:.4f}Cr<extra></extra>',
-        customdata=df_sorted['charm_impact_2hr']
-    ))
-    
-    fig.add_trace(go.Scatter(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex'],
-        mode='lines+markers',
-        name='Current GEX',
-        line=dict(color='#06b6d4', width=4),
-        marker=dict(size=8, symbol='circle'),
-        hovertemplate='Strike: %{y:,.0f}<br>Current: %{x:.4f}Cr<extra></extra>'
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="white", line_width=2,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white", family="Arial Black")))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=1)
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=1,
-            opacity=0.3
-        )
-    
-    fig.update_layout(
-        title=dict(
-            text="<b>⏰ CHARM-Adjusted GEX (Time Decay Scenarios)</b><br><sub>Shows how GEX evolves with time decay</sub>",
-            font=dict(size=18, color='white')
-        ),
-        xaxis_title="GEX (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        legend=dict(
-            orientation='v',
-            yanchor='top',
-            y=0.99,
-            xanchor='left',
-            x=0.01,
-            font=dict(color='white', size=12),
-            bgcolor='rgba(0,0,0,0.7)',
-            bordercolor='white',
-            borderwidth=1
-        ),
-        hovermode='closest',
-        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, zeroline=True, zerolinecolor='rgba(128,128,128,0.5)'),
-        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
-        margin=dict(l=80, r=80, t=100, b=80)
-    )
-    
-    if max_impact > 0.001:
-        fig.add_annotation(
-            xref="paper", yref="paper",
-            x=0.98, y=0.02,
-            text=f"Max CHARM Impact: ±{max_impact:.3f}Cr<br>4-hour time decay effect",
-            showarrow=False,
-            bgcolor="rgba(255,255,255,0.1)",
-            bordercolor="white",
-            borderwidth=1,
-            font=dict(color="white", size=10),
-            align="right"
-        )
-    
-    return fig
-
-# SCREENER VISUALIZATIONS (keeping from stock version)
-
-def display_screener_results(df_results: pd.DataFrame, filter_type: str):
-    """Display screener results"""
-    if len(df_results) == 0:
-        st.warning("No stocks match the screening criteria")
-        return
-    
-    st.success(f"✅ Found {len(df_results)} stocks matching criteria")
-    
+# Screener visualization functions
+def display_screener_results(df_results: pd.DataFrame):
+    """Display screener results as cards"""
     for idx, row in df_results.iterrows():
-        flip_analysis = row['flip_analysis']
-        
-        if filter_type in ['above', 'positive_gex', 'positive_gamma_diff']:
-            card_class = 'bullish'
-            signal_badge = 'long'
-            signal_text = '🟢 LONG OPPORTUNITY'
-        elif filter_type in ['below', 'negative_gex', 'negative_gamma_diff']:
-            card_class = 'bearish'
-            signal_badge = 'short'
-            signal_text = '🔴 SHORT OPPORTUNITY'
-        elif filter_type in ['high_volume', 'high_call_volume']:
-            card_class = 'bullish'
-            signal_badge = 'long'
-            signal_text = '📊 HIGH VOLUME'
-        elif filter_type == 'high_put_volume':
-            card_class = 'bearish'
-            signal_badge = 'short'
-            signal_text = '📉 HIGH PUT VOLUME'
-        else:
-            card_class = 'neutral'
-            signal_badge = 'long' if row.get('total_gex', 0) > 0 else 'short'
-            signal_text = '🔵 FLIP ZONE DETECTED'
-        
-        if flip_analysis['has_flip_zones'] and flip_analysis['nearest_flip']:
-            nearest = flip_analysis['nearest_flip']
-            flip_info = f"Flip @ ₹{nearest['strike']:,.2f} ({nearest['distance_pct']:.2f}% away) {nearest['arrow']}"
-        else:
-            flip_info = "No flip zones"
-        
-        total_volume = row.get('total_volume', 0)
-        call_volume = row.get('call_volume', 0)
-        put_volume = row.get('put_volume', 0)
-        volume_pcr = row.get('volume_pcr', 1)
-        
-        top_strikes = row.get('top_volume_strikes', [])
-        
-        gamma_diff = row.get('gamma_differential', 0)
-        gamma_diff_label = 'OTM Call γ > Put γ' if gamma_diff > 0 else 'OTM Put γ > Call γ'
-        
-        gex_color = '#10b981' if row['total_gex'] > 0 else '#ef4444'
-        dex_color = '#10b981' if row['total_dex'] > 0 else '#ef4444'
-        gamma_diff_color = '#10b981' if gamma_diff > 0 else '#ef4444'
-        
-        strikes_text = ""
-        if top_strikes and len(top_strikes) > 0:
-            strikes_text = " | ".join([f"₹{s['strike']:,.0f} ({s['total_volume']:,.0f})" for s in top_strikes[:3]])
+        gex_color = '#10b981' if row['net_gex'] > 0 else '#ef4444'
+        signal = '🟢 BULLISH' if row['net_gex'] > 0 else '🔴 BEARISH'
         
         card_html = f"""
-        <div class="screener-card {card_class}">
+        <div style="background: #1a2332; border: 2px solid #2d3748; border-left: 4px solid {gex_color}; 
+                    border-radius: 12px; padding: 20px; margin: 10px 0;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <h3 style="margin: 0; color: #f8fafc; font-size: 1.5rem;">{row['symbol']}</h3>
-                    <p style="margin: 5px 0; color: #cbd5e1;">Spot: ₹{row['spot_price']:,.2f}</p>
+                    <p style="margin: 5px 0; color: #cbd5e1;">Spot: ₹{row['spot']:,.2f}</p>
                 </div>
-                <div class="opportunity-badge {signal_badge}">{signal_text}</div>
+                <div style="background: rgba({16 if row['net_gex'] > 0 else 239}, {185 if row['net_gex'] > 0 else 68}, {129 if row['net_gex'] > 0 else 68}, 0.2);
+                           color: {gex_color}; padding: 8px 16px; border-radius: 20px; font-weight: 600;">
+                    {signal}
+                </div>
             </div>
             <div style="margin-top: 15px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
                 <div>
                     <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">NET GEX</p>
-                    <p style="margin: 5px 0; color: {gex_color}; font-weight: 600;">
-                        {row['total_gex']:.4f}Cr
-                    </p>
+                    <p style="margin: 5px 0; color: {gex_color}; font-weight: 600;">{row['net_gex']:.4f}Cr</p>
                 </div>
                 <div>
                     <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">NET DEX</p>
-                    <p style="margin: 5px 0; color: {dex_color}; font-weight: 600;">
-                        {row['total_dex']:.4f}Cr
-                    </p>
-                </div>
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">OI P/C RATIO</p>
-                    <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{row['pcr']:.2f}</p>
+                    <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{row['net_dex']:.4f}Cr</p>
                 </div>
                 <div>
                     <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">FLIP ZONES</p>
-                    <p style="margin: 5px 0; color: #fbbf24; font-weight: 600;">
-                        {flip_analysis['flip_count'] if flip_analysis['has_flip_zones'] else 0}
-                    </p>
-                </div>
-            </div>
-            <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding-top: 10px; border-top: 1px solid #374151;">
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">TOTAL VOLUME</p>
-                    <p style="margin: 5px 0; color: #06b6d4; font-weight: 600;">{total_volume:,.0f}</p>
+                    <p style="margin: 5px 0; color: #fbbf24; font-weight: 600;">{row['flip_zones']}</p>
                 </div>
                 <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">CALL VOLUME</p>
-                    <p style="margin: 5px 0; color: #10b981; font-weight: 600;">{call_volume:,.0f}</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">POSITION</p>
+                    <p style="margin: 5px 0; color: #06b6d4; font-weight: 600; font-size: 0.8rem;">{row['flip_position']}</p>
                 </div>
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">PUT VOLUME</p>
-                    <p style="margin: 5px 0; color: #ef4444; font-weight: 600;">{put_volume:,.0f}</p>
-                </div>
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">VOL P/C RATIO</p>
-                    <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{volume_pcr:.2f}</p>
-                </div>
-            </div>"""
-        
-        if strikes_text:
-            card_html += f"""
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
-                <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">📍 HIGH VOLUME STRIKES</p>
-                <p style="margin: 5px 0; color: #06b6d4; font-weight: 600; font-size: 0.9rem;">
-                    {strikes_text}
-                </p>
-            </div>"""
-        
-        card_html += f"""
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #374151;">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <div>
-                        <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">⚡ GAMMA DIFFERENTIAL</p>
-                        <p style="margin: 5px 0; color: {gamma_diff_color}; font-weight: 600; font-size: 0.85rem;">
-                            {gamma_diff:.6f} ({gamma_diff_label})
-                        </p>
-                    </div>
-                    <div>
-                        <p style="margin: 0; color: #cbd5e1; font-size: 0.85rem;">
-                            🔄 {flip_info}
-                        </p>
-                    </div>
-                </div>
-                <p style="margin: 5px 0 0 0; color: #9ca3af; font-size: 0.75rem;">
-                    {row['timestamp']} | {row['strikes_analyzed']} strikes analyzed
-                </p>
             </div>
         </div>
         """
-        
         st.markdown(card_html, unsafe_allow_html=True)
 
 def create_screener_summary_chart(df_results: pd.DataFrame) -> go.Figure:
@@ -2535,126 +1314,24 @@ def create_screener_summary_chart(df_results: pd.DataFrame) -> go.Figure:
     
     fig.add_trace(go.Bar(
         y=df_results['symbol'],
-        x=df_results['total_gex'],
+        x=df_results['net_gex'],
         orientation='h',
         name='NET GEX',
-        marker_color=['#10b981' if x > 0 else '#ef4444' for x in df_results['total_gex']],
-        hovertemplate='%{y}<br>GEX: %{x:.4f}Cr<extra></extra>'
+        marker_color=['#10b981' if x > 0 else '#ef4444' for x in df_results['net_gex']]
     ))
     
     fig.update_layout(
         title="<b>NET GEX Comparison</b>",
-        xaxis_title="NET GEX (₹ Crores)",
-        yaxis_title="Stock",
         template="plotly_dark",
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(26,35,50,0.8)',
-        height=max(400, len(df_results) * 50),
-        showlegend=False
-    )
-    
-    return fig
-
-def create_volume_comparison_chart(df_results: pd.DataFrame) -> go.Figure:
-    """Volume comparison chart for screener"""
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_results['symbol'],
-        x=df_results['call_volume'],
-        orientation='h',
-        name='Call Volume',
-        marker_color='#10b981',
-        hovertemplate='%{y}<br>Call Vol: %{x:,.0f}<extra></extra>'
-    ))
-    
-    fig.add_trace(go.Bar(
-        y=df_results['symbol'],
-        x=-df_results['put_volume'],
-        orientation='h',
-        name='Put Volume',
-        marker_color='#ef4444',
-        hovertemplate='%{y}<br>Put Vol: %{customdata:,.0f}<extra></extra>',
-        customdata=df_results['put_volume']
-    ))
-    
-    fig.update_layout(
-        title="<b>Call vs Put Volume Comparison</b>",
-        xaxis_title="Volume (Calls +ve | Puts -ve)",
-        yaxis_title="Stock",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=max(400, len(df_results) * 50),
-        barmode='overlay',
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
-    )
-    
-    return fig
-
-def create_total_volume_chart(df_results: pd.DataFrame) -> go.Figure:
-    """Total volume chart for screener"""
-    df_sorted = df_results.sort_values('total_volume', ascending=True)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['symbol'],
-        x=df_sorted['total_volume'],
-        orientation='h',
-        name='Total Volume',
-        marker_color='#3b82f6',
-        hovertemplate='%{y}<br>Total Vol: %{x:,.0f}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title="<b>Total Options Volume</b>",
-        xaxis_title="Total Volume",
-        yaxis_title="Stock",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=max(400, len(df_sorted) * 50),
-        showlegend=False
-    )
-    
-    return fig
-
-def create_gamma_differential_chart(df_results: pd.DataFrame) -> go.Figure:
-    """Gamma differential comparison chart"""
-    df_sorted = df_results.sort_values('gamma_diff_normalized', ascending=True)
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['gamma_diff_normalized']]
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['symbol'],
-        x=df_sorted['gamma_diff_normalized'],
-        orientation='h',
-        name='Gamma Differential',
-        marker_color=colors,
-        hovertemplate='%{y}<br>γ Diff: %{x:.6f}<br>%{customdata}<extra></extra>',
-        customdata=[f"OTM Call γ {'>' if x > 0 else '<'} OTM Put γ" for x in df_sorted['gamma_diff_normalized']]
-    ))
-    
-    fig.add_vline(x=0, line_dash="dot", line_color="white", line_width=2)
-    
-    fig.update_layout(
-        title="<b>⚡ Gamma Differential (OTM Calls vs OTM Puts)</b>",
-        xaxis_title="Normalized Gamma Differential (γ_calls - γ_puts)",
-        yaxis_title="Stock",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=max(400, len(df_sorted) * 50),
-        showlegend=False
+        height=max(400, len(df_results) * 50)
     )
     
     return fig
 
 # ============================================================================
-# MAIN APPLICATION - COMPLETE UNIFIED VERSION
+# MAIN APPLICATION
 # ============================================================================
 
 def main():
@@ -2788,7 +1465,7 @@ def main():
             
             fetch_button = st.button("🚀 Fetch Data", use_container_width=True, type="primary")
         
-        else:
+        else:  # Screener mode
             st.markdown("#### Stock Selection")
             
             preset = st.selectbox("Quick Preset",
@@ -2819,12 +1496,7 @@ def main():
                  "🔴 Spot Below Gamma Flip", 
                  "🔵 All Stocks with Flip Zones",
                  "✅ NET GEX Positive",
-                 "❌ NET GEX Negative",
-                 "📊 High Volume (Top 10)",
-                 "📈 High Call Volume",
-                 "📉 High Put Volume",
-                 "⚡ Positive Gamma Differential",
-                 "⚡ Negative Gamma Differential"],
+                 "❌ NET GEX Negative"],
                 index=0)
             
             st.markdown("---")
@@ -2861,22 +1533,23 @@ def main():
             }
             st.session_state.data_fetched = False
         
-        # Fetch data if button clicked or if config changed
+        # Fetch data if button clicked
         if 'fetch_config' in st.session_state and not st.session_state.get('data_fetched', False):
-            config = st.session_state.fetch_config
+            config_obj = st.session_state.fetch_config
             
             with st.spinner("🔍 Fetching data with cache..."):
-                fetcher = DhanStockOptionsFetcher()
+                # FIX: Create DhanConfig and instantiate fetcher properly
+                dhan_config = DhanConfig()
+                fetcher = DhanStockOptionsFetcher(dhan_config, cache_manager)
                 
                 try:
-                    df, metadata = fetcher.fetch_with_cache(
-                        cache_manager=cache_manager,
-                        symbol=config['symbol'],
-                        target_date=config['target_date'],
-                        strikes=config['strikes'],
-                        interval=config['interval'],
-                        expiry_code=config['expiry_code'],
-                        expiry_flag=config['expiry_flag']
+                    df, metadata, from_cache = fetcher.fetch_with_cache(
+                        symbol=config_obj['symbol'],
+                        target_date=config_obj['target_date'],
+                        strikes=config_obj['strikes'],
+                        interval=config_obj['interval'],
+                        expiry_code=config_obj['expiry_code'],
+                        expiry_flag=config_obj['expiry_flag']
                     )
                     
                     if df is not None and len(df) > 0:
@@ -2885,7 +1558,7 @@ def main():
                         st.session_state.data_fetched = True
                         st.session_state.timestamp_idx = 0
                         
-                        cache_status = "✅ LOADED FROM CACHE" if metadata.get('from_cache', False) else "🆕 FETCHED FRESH"
+                        cache_status = "✅ LOADED FROM CACHE" if from_cache else "🆕 FETCHED FRESH"
                         st.success(f"{cache_status} | {len(df)} records | {len(df['timestamp'].unique())} timestamps")
                     else:
                         st.error("No data received")
@@ -2933,20 +1606,10 @@ def main():
                 st.info(f"🕐 {current_timestamp.strftime('%Y-%m-%d %H:%M:%S')} IST | Record {st.session_state.timestamp_idx + 1}/{len(unique_timestamps)}")
                 
                 # Get spot price
-                spot_price = metadata.get('spot_price', df_current['spot'].iloc[0] if len(df_current) > 0 else 0)
-                
-                # Calculate all metrics
-                df_current = calculate_greeks(df_current, spot_price, is_index=False)
-                df_current = calculate_flows(df_current)
-                df_current = calculate_oi_based_gex(df_current)
-                df_current = calculate_predictive_models(df_current)
-                df_current = calculate_vanna_charm_scenarios(df_current, spot_price, is_index=False)
-                
-                # Aggregate metrics
-                metrics = aggregate_gex_dex_metrics(df_current)
+                spot_price = metadata.get('spot_price', df_current['spot_price'].iloc[0] if len(df_current) > 0 else 0)
                 
                 # Calculate flip zones
-                flip_zones = identify_gamma_flip_zones(df_current)
+                flip_zones = identify_gamma_flip_zones(df_current, spot_price)
                 flip_position = analyze_flip_zone_position(spot_price, flip_zones)
                 
                 # Display key metrics
@@ -2954,79 +1617,36 @@ def main():
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
                 with col1:
-                    net_gex_cr = metrics['net_gex'] / 1e7
-                    gex_color = "green" if net_gex_cr > 0 else "red"
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, rgba({255 if net_gex_cr < 0 else 34}, {34 if net_gex_cr > 0 else 197}, {34 if net_gex_cr > 0 else 94}, 0.15), rgba({255 if net_gex_cr < 0 else 34}, {34 if net_gex_cr > 0 else 197}, {34 if net_gex_cr > 0 else 94}, 0.05)); 
-                                border: 2px solid rgba({255 if net_gex_cr < 0 else 34}, {34 if net_gex_cr > 0 else 197}, {34 if net_gex_cr > 0 else 94}, 0.3); border-radius: 12px; padding: 16px; text-align: center;'>
-                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>NET GEX</div>
-                        <div style='font-size: 1.5rem; font-weight: bold; color: {gex_color};'>₹{abs(net_gex_cr):.1f}Cr</div>
-                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{"🟢 BULLISH" if net_gex_cr > 0 else "🔴 BEARISH"}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    net_gex = df_current['net_gex'].sum()
+                    st.metric("NET GEX", f"₹{abs(net_gex):.2f}Cr", 
+                             delta="Bullish" if net_gex > 0 else "Bearish")
                 
                 with col2:
-                    net_dex_cr = metrics['net_dex'] / 1e7
-                    dex_color = "green" if net_dex_cr > 0 else "red"
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, rgba({255 if net_dex_cr < 0 else 34}, {34 if net_dex_cr > 0 else 197}, {34 if net_dex_cr > 0 else 94}, 0.15), rgba({255 if net_dex_cr < 0 else 34}, {34 if net_dex_cr > 0 else 197}, {34 if net_dex_cr > 0 else 94}, 0.05)); 
-                                border: 2px solid rgba({255 if net_dex_cr < 0 else 34}, {34 if net_dex_cr > 0 else 197}, {34 if net_dex_cr > 0 else 94}, 0.3); border-radius: 12px; padding: 16px; text-align: center;'>
-                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>NET DEX</div>
-                        <div style='font-size: 1.5rem; font-weight: bold; color: {dex_color};'>₹{abs(net_dex_cr):.1f}Cr</div>
-                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{"📈 LONG" if net_dex_cr > 0 else "📉 SHORT"}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    net_dex = df_current['net_dex'].sum()
+                    st.metric("NET DEX", f"₹{abs(net_dex):.2f}Cr",
+                             delta="Long" if net_dex > 0 else "Short")
                 
                 with col3:
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.05)); 
-                                border: 2px solid rgba(59,130,246,0.3); border-radius: 12px; padding: 16px; text-align: center;'>
-                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>SPOT</div>
-                        <div style='font-size: 1.5rem; font-weight: bold; color: #3b82f6;'>₹{spot_price:.2f}</div>
-                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{metadata.get('symbol', 'STOCK')}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.metric("SPOT", f"₹{spot_price:,.2f}", 
+                             delta=metadata.get('symbol', 'STOCK'))
                 
                 with col4:
-                    pressure = metrics['hedging_pressure']
-                    pressure_color = "#22c55e" if pressure > 20 else ("#ef4444" if pressure < -20 else "#eab308")
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, rgba(234,179,8,0.15), rgba(234,179,8,0.05)); 
-                                border: 2px solid rgba(234,179,8,0.3); border-radius: 12px; padding: 16px; text-align: center;'>
-                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>PRESSURE</div>
-                        <div style='font-size: 1.5rem; font-weight: bold; color: {pressure_color};'>{pressure:+.1f}%</div>
-                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{"⚡ HIGH" if abs(pressure) > 40 else "📊 NORMAL"}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    hedging_pressure = df_current['hedging_pressure'].mean()
+                    st.metric("PRESSURE", f"{hedging_pressure:+.1f}%",
+                             delta="High" if abs(hedging_pressure) > 40 else "Normal")
                 
                 with col5:
-                    flip_color = "#22c55e" if flip_position == "Above all flip zones" else ("#ef4444" if flip_position == "Below all flip zones" else "#eab308")
-                    flip_emoji = "🟢" if flip_position == "Above all flip zones" else ("🔴" if flip_position == "Below all flip zones" else "🟡")
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(168,85,247,0.05)); 
-                                border: 2px solid rgba(168,85,247,0.3); border-radius: 12px; padding: 16px; text-align: center;'>
-                        <div style='font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px;'>FLIP ZONES</div>
-                        <div style='font-size: 1.5rem; font-weight: bold; color: {flip_color};'>{flip_emoji}</div>
-                        <div style='font-size: 0.7rem; color: #64748b; margin-top: 4px;'>{len(flip_zones)} ZONES</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.metric("FLIP ZONES", len(flip_zones),
+                             delta=flip_position)
                 
-                # Tabs for detailed analysis
+                # Tabs for analysis
                 st.markdown("---")
                 
                 tabs = st.tabs([
                     "📊 Overview",
                     "📈 GEX Analysis", 
                     "📉 DEX Analysis",
-                    "⚡ Flows",
                     "🎯 OI Analysis",
-                    "🔮 VANNA",
-                    "⏱️ CHARM",
-                    "📊 Hedging",
-                    "🎨 Predictive",
-                    "📍 Support/Resistance",
-                    "📊 Volume Analysis",
-                    "🔄 Comparisons",
                     "📋 Data Table"
                 ])
                 
@@ -3052,232 +1672,40 @@ def main():
                                 st.metric("Position", signal)
                     else:
                         st.info("No gamma flip zones detected")
-                    
-                    st.markdown(f"**Position:** {flip_position}")
                 
                 with tabs[1]:  # GEX Analysis
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("### 📊 GEX with Flip Zones")
-                        fig = create_separate_gex_chart(df_current, metadata, flip_zones, spot_price)
-                        st.plotly_chart(fig, use_container_width=True)
+                    st.markdown("### 📊 GEX with Flip Zones")
+                    fig = create_separate_gex_chart(df_current, metadata, flip_zones, spot_price)
+                    st.plotly_chart(fig, use_container_width=True)
                     
-                    with col2:
-                        st.markdown("### 📊 GEX + DEX Combined")
-                        fig = create_net_gex_dex_chart(df_current, metadata, flip_zones, spot_price)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.markdown("### 📊 GEX Flow Over Time")
-                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
-                    if len(df_timeline) > 0:
-                        fig = create_gex_flow_chart(df_timeline, metadata, flip_zones, spot_price)
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[2]:  # DEX Analysis
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("### 📊 Delta Exposure")
-                        fig = create_separate_dex_chart(df_current, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        st.markdown("### 📊 DEX Flow")
-                        df_timeline = df[df['timestamp'] <= current_timestamp].copy()
-                        if len(df_timeline) > 0:
-                            fig = create_dex_flow_chart(df_timeline, metadata)
-                            st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[3]:  # Flows
-                    st.markdown("### ⚡ OI-Based GEX (Position Changes)")
-                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
-                    if len(df_timeline) > 0:
-                        fig = create_oi_based_gex_chart(df_timeline, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.markdown("### 📊 Original vs OI-Based GEX Comparison")
-                    fig = create_gex_overlay_chart(df_current, metadata)
+                    st.markdown("### 📊 GEX + DEX Combined")
+                    fig = create_net_gex_dex_chart(df_current, metadata, flip_zones, spot_price)
                     st.plotly_chart(fig, use_container_width=True)
                 
-                with tabs[4]:  # OI Analysis
+                with tabs[2]:  # DEX Analysis
+                    st.markdown("### 📊 Delta Exposure")
+                    fig = create_separate_dex_chart(df_current, metadata)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with tabs[3]:  # OI Analysis
                     st.markdown("### 📊 Open Interest Distribution")
                     fig = create_oi_distribution(df_current, metadata, spot_price)
                     st.plotly_chart(fig, use_container_width=True)
                 
-                with tabs[5]:  # VANNA
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("### 🔮 VANNA Exposure")
-                        fig = create_vanna_exposure_chart(df_current, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        st.markdown("### 🔮 VANNA-Adjusted GEX")
-                        fig = create_vanna_adjusted_gex_chart(df_current, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[6]:  # CHARM
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("### ⏱️ CHARM Exposure")
-                        fig = create_charm_exposure_chart(df_current, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        st.markdown("### ⏱️ CHARM-Adjusted GEX")
-                        fig = create_charm_adjusted_gex_chart(df_current, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[7]:  # Hedging
-                    st.markdown("### 📊 Hedging Pressure")
-                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
-                    if len(df_timeline) > 0:
-                        fig = create_hedging_pressure_chart(df_timeline, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[8]:  # Predictive
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("### 📊 Volume-Weighted GEX")
-                        fig = create_volume_weighted_gex_chart(df_current, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        st.markdown("### 📍 Support/Resistance Strength")
-                        fig = create_support_resistance_strength_chart(df_current, metadata, spot_price)
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[9]:  # Support/Resistance
-                    st.markdown("### 📊 Strike-wise Metrics")
-                    
-                    summary_df = df_current.groupby('strike').agg({
-                        'call_gex': 'sum',
-                        'put_gex': 'sum',
-                        'call_dex': 'sum',
-                        'put_dex': 'sum',
-                        'call_oi': 'sum',
-                        'put_oi': 'sum',
-                        'support_resistance_strength': 'mean'
-                    }).reset_index()
-                    
-                    summary_df['net_gex'] = summary_df['call_gex'] - summary_df['put_gex']
-                    summary_df['net_dex'] = summary_df['call_dex'] - summary_df['put_dex']
-                    summary_df = summary_df.sort_values('strike')
-                    
-                    st.dataframe(summary_df.style.format({
-                        'strike': '₹{:.2f}',
-                        'call_gex': '₹{:.0f}',
-                        'put_gex': '₹{:.0f}',
-                        'net_gex': '₹{:.0f}',
-                        'call_dex': '₹{:.0f}',
-                        'put_dex': '₹{:.0f}',
-                        'net_dex': '₹{:.0f}',
-                        'call_oi': '{:.0f}',
-                        'put_oi': '{:.0f}',
-                        'support_resistance_strength': '{:.2f}'
-                    }), use_container_width=True)
-                
-                with tabs[10]:  # Volume Analysis
-                    st.markdown("### 📊 Call vs Put Volume")
-                    
-                    call_vol = df_current['call_volume'].sum()
-                    put_vol = df_current['put_volume'].sum()
-                    pcr = put_vol / call_vol if call_vol > 0 else 0
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Call Volume", f"{call_vol:,.0f}")
-                    with col2:
-                        st.metric("Put Volume", f"{put_vol:,.0f}")
-                    with col3:
-                        st.metric("PCR", f"{pcr:.2f}")
-                    
-                    # Volume by strike
-                    vol_df = df_current.groupby('strike').agg({
-                        'call_volume': 'sum',
-                        'put_volume': 'sum'
-                    }).reset_index().sort_values('strike')
-                    
-                    fig = go.Figure()
-                    fig.add_trace(go.Bar(x=vol_df['strike'], y=vol_df['call_volume'], 
-                                        name='Call Volume', marker_color='#22c55e'))
-                    fig.add_trace(go.Bar(x=vol_df['strike'], y=-vol_df['put_volume'], 
-                                        name='Put Volume', marker_color='#ef4444'))
-                    fig.add_vline(x=spot_price, line_dash="dash", line_color="#3b82f6", 
-                                 annotation_text="Spot", annotation_position="top")
-                    
-                    fig.update_layout(
-                        template="plotly_dark",
-                        barmode='relative',
-                        title="Volume Distribution by Strike",
-                        xaxis_title="Strike",
-                        yaxis_title="Volume",
-                        height=400
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[11]:  # Comparisons
-                    st.markdown("### 📊 Multi-Metric Comparison")
-                    
-                    comparison_df = df_current.groupby('strike').agg({
-                        'call_gex': 'sum',
-                        'put_gex': 'sum',
-                        'call_oi_gex': 'sum',
-                        'put_oi_gex': 'sum',
-                        'volume_weighted_gex': 'mean'
-                    }).reset_index()
-                    
-                    comparison_df['net_gex'] = comparison_df['call_gex'] - comparison_df['put_gex']
-                    comparison_df['net_oi_gex'] = comparison_df['call_oi_gex'] - comparison_df['put_oi_gex']
-                    comparison_df = comparison_df.sort_values('strike')
-                    
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=comparison_df['strike'], y=comparison_df['net_gex']/1e7,
-                                           name='NET GEX', line=dict(color='#3b82f6', width=2)))
-                    fig.add_trace(go.Scatter(x=comparison_df['strike'], y=comparison_df['net_oi_gex']/1e7,
-                                           name='OI-Based GEX', line=dict(color='#8b5cf6', width=2)))
-                    fig.add_trace(go.Scatter(x=comparison_df['strike'], y=comparison_df['volume_weighted_gex']/1e7,
-                                           name='Vol-Weighted GEX', line=dict(color='#eab308', width=2)))
-                    fig.add_vline(x=spot_price, line_dash="dash", line_color="#22c55e")
-                    
-                    fig.update_layout(
-                        template="plotly_dark",
-                        title="GEX Variants Comparison",
-                        xaxis_title="Strike (₹)",
-                        yaxis_title="GEX (₹ Cr)",
-                        height=500
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[12]:  # Data Table
+                with tabs[4]:  # Data Table
                     st.markdown("### 📋 Complete Data Table")
-                    
                     display_cols = ['strike', 'call_oi', 'call_volume', 'call_gex', 'call_dex', 
                                    'put_oi', 'put_volume', 'put_gex', 'put_dex', 
                                    'net_gex', 'net_dex', 'hedging_pressure']
                     
                     display_df = df_current[display_cols].copy()
                     display_df = display_df.sort_values('strike')
-                    
-                    st.dataframe(display_df.style.format({
-                        'strike': '₹{:.2f}',
-                        'call_oi': '{:.0f}',
-                        'call_volume': '{:.0f}',
-                        'call_gex': '₹{:.0f}',
-                        'call_dex': '₹{:.0f}',
-                        'put_oi': '{:.0f}',
-                        'put_volume': '{:.0f}',
-                        'put_gex': '₹{:.0f}',
-                        'put_dex': '₹{:.0f}',
-                        'net_gex': '₹{:.0f}',
-                        'net_dex': '₹{:.0f}',
-                        'hedging_pressure': '{:.2f}%'
-                    }), use_container_width=True, height=600)
+                    st.dataframe(display_df, use_container_width=True, height=600)
         
         else:
             st.info("👈 Configure settings in sidebar and click 'Fetch Data' to begin analysis")
     
-    else:
-        # SCREENER MODE
+    else:  # SCREENER MODE
         if run_screener:
             st.markdown("### 🔍 Multi-Stock Screener Results")
             
@@ -3285,17 +1713,19 @@ def main():
             progress_bar = st.progress(0)
             status_text = st.empty()
             
+            # FIX: Create DhanConfig before the loop
+            dhan_config = DhanConfig()
+            
             for idx, stock_symbol in enumerate(selected_stocks):
                 status_text.text(f"Screening {stock_symbol}... ({idx+1}/{len(selected_stocks)})")
                 progress_bar.progress((idx + 1) / len(selected_stocks))
                 
                 try:
-                    fetcher = DhanStockOptionsFetcher()
+                    # FIX: Instantiate fetcher with config and cache_manager
+                    fetcher = DhanStockOptionsFetcher(dhan_config, cache_manager)
                     today = datetime.now().strftime('%Y-%m-%d')
                     
-                    # Use ATM and nearby strikes for screening
-                    df, metadata = fetcher.fetch_with_cache(
-                        cache_manager=cache_manager,
+                    df, metadata, from_cache = fetcher.fetch_with_cache(
                         symbol=stock_symbol,
                         target_date=today,
                         strikes=strike_list,
@@ -3309,42 +1739,22 @@ def main():
                         latest_time = df['timestamp'].max()
                         df_latest = df[df['timestamp'] == latest_time].copy()
                         
-                        spot_price = metadata.get('spot_price', df_latest['spot'].iloc[0])
+                        spot_price = metadata.get('spot_price', df_latest['spot_price'].iloc[0])
                         
-                        # Calculate all metrics
-                        df_latest = calculate_greeks(df_latest, spot_price, is_index=False)
-                        df_latest = calculate_flows(df_latest)
-                        metrics = aggregate_gex_dex_metrics(df_latest)
-                        flip_zones = identify_gamma_flip_zones(df_latest)
+                        # Calculate metrics
+                        net_gex = df_latest['net_gex'].sum()
+                        net_dex = df_latest['net_dex'].sum()
+                        
+                        flip_zones = identify_gamma_flip_zones(df_latest, spot_price)
                         flip_position = analyze_flip_zone_position(spot_price, flip_zones)
-                        
-                        # Calculate additional metrics for screening
-                        call_vol = df_latest['call_volume'].sum()
-                        put_vol = df_latest['put_volume'].sum()
-                        total_vol = call_vol + put_vol
-                        pcr = put_vol / call_vol if call_vol > 0 else 0
-                        
-                        # Calculate gamma differential (OTM calls vs OTM puts)
-                        atm_strike = df_latest.iloc[(df_latest['strike'] - spot_price).abs().argsort()[:1]]['strike'].values[0]
-                        otm_calls = df_latest[df_latest['strike'] > atm_strike]['call_gex'].sum()
-                        otm_puts = df_latest[df_latest['strike'] < atm_strike]['put_gex'].sum()
-                        gamma_diff = otm_calls - otm_puts
                         
                         result = {
                             'symbol': stock_symbol,
                             'spot': spot_price,
-                            'net_gex': metrics['net_gex'],
-                            'net_dex': metrics['net_dex'],
-                            'call_gex': metrics['call_gex'],
-                            'put_gex': metrics['put_gex'],
-                            'hedging_pressure': metrics['hedging_pressure'],
+                            'net_gex': net_gex,
+                            'net_dex': net_dex,
                             'flip_zones': len(flip_zones),
                             'flip_position': flip_position,
-                            'call_volume': call_vol,
-                            'put_volume': put_vol,
-                            'total_volume': total_vol,
-                            'pcr': pcr,
-                            'gamma_differential': gamma_diff,
                             'timestamp': latest_time
                         }
                         
@@ -3372,65 +1782,25 @@ def main():
                     filtered_df = filtered_df[filtered_df['net_gex'] > 0]
                 elif filter_type == "❌ NET GEX Negative":
                     filtered_df = filtered_df[filtered_df['net_gex'] < 0]
-                elif filter_type == "📊 High Volume (Top 10)":
-                    filtered_df = filtered_df.nlargest(10, 'total_volume')
-                elif filter_type == "📈 High Call Volume":
-                    filtered_df = filtered_df[filtered_df['call_volume'] > filtered_df['put_volume']]
-                    filtered_df = filtered_df.nlargest(10, 'call_volume')
-                elif filter_type == "📉 High Put Volume":
-                    filtered_df = filtered_df[filtered_df['put_volume'] > filtered_df['call_volume']]
-                    filtered_df = filtered_df.nlargest(10, 'put_volume')
-                elif filter_type == "⚡ Positive Gamma Differential":
-                    filtered_df = filtered_df[filtered_df['gamma_differential'] > 0]
-                elif filter_type == "⚡ Negative Gamma Differential":
-                    filtered_df = filtered_df[filtered_df['gamma_differential'] < 0]
                 
                 st.success(f"✅ Found {len(filtered_df)} stocks matching filter: **{filter_type}**")
                 
                 if len(filtered_df) > 0:
-                    # Display results as cards
+                    # Display results
                     st.markdown("### 📊 Screener Results")
-                    
-                    # Sort by absolute net GEX
                     filtered_df = filtered_df.sort_values('net_gex', key=abs, ascending=False)
-                    
                     display_screener_results(filtered_df)
                     
-                    # Visualization charts
+                    # Visualization
                     st.markdown("---")
-                    st.markdown("### 📊 Comparison Charts")
+                    st.markdown("### 📊 Comparison Chart")
+                    fig = create_screener_summary_chart(filtered_df)
+                    st.plotly_chart(fig, use_container_width=True)
                     
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        fig = create_screener_summary_chart(filtered_df)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        fig = create_volume_comparison_chart(filtered_df)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        fig = create_total_volume_chart(filtered_df)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        fig = create_gamma_differential_chart(filtered_df)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Export functionality
+                    # Export
                     st.markdown("---")
                     st.markdown("### 💾 Export Results")
-                    
-                    export_df = filtered_df.copy()
-                    export_df['net_gex_cr'] = export_df['net_gex'] / 1e7
-                    export_df['net_dex_cr'] = export_df['net_dex'] / 1e7
-                    export_df['call_gex_cr'] = export_df['call_gex'] / 1e7
-                    export_df['put_gex_cr'] = export_df['put_gex'] / 1e7
-                    
-                    csv = export_df.to_csv(index=False)
+                    csv = filtered_df.to_csv(index=False)
                     st.download_button(
                         label="📥 Download Results (CSV)",
                         data=csv,
@@ -3438,32 +1808,8 @@ def main():
                         mime="text/csv",
                         use_container_width=True
                     )
-                    
-                    # Data table
-                    st.markdown("---")
-                    st.markdown("### 📋 Detailed Data Table")
-                    
-                    display_cols = ['symbol', 'spot', 'net_gex_cr', 'net_dex_cr', 'hedging_pressure',
-                                   'flip_zones', 'call_volume', 'put_volume', 'pcr']
-                    
-                    st.dataframe(
-                        export_df[display_cols].style.format({
-                            'spot': '₹{:.2f}',
-                            'net_gex_cr': '₹{:.2f}Cr',
-                            'net_dex_cr': '₹{:.2f}Cr',
-                            'hedging_pressure': '{:+.1f}%',
-                            'flip_zones': '{:.0f}',
-                            'call_volume': '{:,.0f}',
-                            'put_volume': '{:,.0f}',
-                            'pcr': '{:.2f}'
-                        }),
-                        use_container_width=True,
-                        height=400
-                    )
-                
                 else:
                     st.warning(f"No stocks found matching the filter: {filter_type}")
-            
             else:
                 st.error("No data retrieved for any stocks")
         
