@@ -1,32 +1,10 @@
 # ============================================================================
-# NYZTrade Stock Options GEX/DEX Dashboard - COMPLETE UNIFIED VERSION (FIXED)
-# Features: Full Analysis + Screener | All Charts | Cache | VANNA/CHARM | Everything!
+# NYZTrade UNIFIED GEX/DEX Dashboard - INDEX + STOCK OPTIONS
+# Features: Weekly/Monthly Options | VANNA & CHARM | Gamma Flip Zones | Smart Caching
+# Supports: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY + 30 F&O Stocks
 # ============================================================================
 
-import subprocess
-import sys
-
-def install_packages():
-    """Install required packages if not already installed"""
-    required = {
-        'streamlit': 'streamlit',
-        'pandas': 'pandas',
-        'numpy': 'numpy',
-        'plotly': 'plotly',
-        'scipy': 'scipy',
-        'requests': 'requests',
-        'pytz': 'pytz'
-    }
-    
-    for package, pip_name in required.items():
-        try:
-            __import__(package)
-        except ImportError:
-            print(f"Installing {package}...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name, "-q"])
-
-install_packages()
-
+# Standard imports
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -39,207 +17,21 @@ import requests
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
-import pickle
-import os
-from pathlib import Path
-import hashlib
 import warnings
+import hashlib
+import json
+import os
+import pickle
+from pathlib import Path
 warnings.filterwarnings('ignore')
-
-# ============================================================================
-# CACHE CONFIGURATION
-# ============================================================================
-
-CACHE_DIR = Path("stock_gex_cache")
-CACHE_DIR.mkdir(exist_ok=True)
-
-CACHE_INDEX_FILE = CACHE_DIR / "cache_index.pkl"
-CACHE_METADATA_FILE = CACHE_DIR / "cache_metadata.pkl"
-
-# ============================================================================
-# DATA CACHE MANAGER
-# ============================================================================
-
-class DataCacheManager:
-    """Manages local cache of historical stock GEX data for instant access"""
-    
-    def __init__(self):
-        self.cache_dir = CACHE_DIR
-        self.index_file = CACHE_INDEX_FILE
-        self.metadata_file = CACHE_METADATA_FILE
-        self.cache_index = self.load_cache_index()
-        self.metadata = self.load_metadata()
-    
-    def load_cache_index(self) -> Dict:
-        """Load cache index from file"""
-        if self.index_file.exists():
-            try:
-                with open(self.index_file, 'rb') as f:
-                    return pickle.load(f)
-            except:
-                return {}
-        return {}
-    
-    def save_cache_index(self):
-        """Save cache index to file"""
-        with open(self.index_file, 'wb') as f:
-            pickle.dump(self.cache_index, f)
-    
-    def load_metadata(self) -> Dict:
-        """Load cache metadata"""
-        if self.metadata_file.exists():
-            try:
-                with open(self.metadata_file, 'rb') as f:
-                    return pickle.load(f)
-            except:
-                return {}
-        return {}
-    
-    def save_metadata(self):
-        """Save cache metadata"""
-        with open(self.metadata_file, 'wb') as f:
-            pickle.dump(self.metadata, f)
-    
-    def get_cache_key(self, symbol: str, date: str, strikes: List[str], 
-                     interval: str, expiry_code: int, expiry_flag: str) -> str:
-        """Generate unique cache key"""
-        strikes_str = "_".join(sorted(strikes))
-        key = f"{symbol}_{date}_{strikes_str}_{interval}_{expiry_flag}_{expiry_code}"
-        if len(key) > 200:
-            key = hashlib.md5(key.encode()).hexdigest()
-        return key
-    
-    def get_cache_file_path(self, cache_key: str) -> Path:
-        """Get file path for cache key"""
-        return self.cache_dir / f"{cache_key}.pkl"
-    
-    def is_cached(self, cache_key: str) -> bool:
-        """Check if data is cached"""
-        return cache_key in self.cache_index and self.get_cache_file_path(cache_key).exists()
-    
-    def save_to_cache(self, cache_key: str, df: pd.DataFrame, meta: Dict):
-        """Save data to cache"""
-        cache_file = self.get_cache_file_path(cache_key)
-        
-        data = {
-            'df': df,
-            'meta': meta,
-            'cached_at': datetime.now().isoformat()
-        }
-        
-        try:
-            with open(cache_file, 'wb') as f:
-                pickle.dump(data, f)
-            
-            self.cache_index[cache_key] = {
-                'file': str(cache_file),
-                'cached_at': data['cached_at'],
-                'symbol': meta.get('symbol', ''),
-                'date': meta.get('date', ''),
-                'records': len(df)
-            }
-            self.save_cache_index()
-            
-            if 'total_cached_datasets' not in self.metadata:
-                self.metadata['total_cached_datasets'] = 0
-            self.metadata['total_cached_datasets'] = len(self.cache_index)
-            self.metadata['last_update'] = datetime.now().isoformat()
-            self.save_metadata()
-            return True
-        except Exception as e:
-            st.error(f"Cache save error: {e}")
-            return False
-    
-    def load_from_cache(self, cache_key: str) -> tuple:
-        """Load data from cache"""
-        if not self.is_cached(cache_key):
-            return None, None
-        
-        cache_file = self.get_cache_file_path(cache_key)
-        
-        try:
-            with open(cache_file, 'rb') as f:
-                data = pickle.load(f)
-            return data['df'], data['meta']
-        except Exception as e:
-            st.error(f"Cache load error: {e}")
-            return None, None
-    
-    def get_cache_stats(self) -> Dict:
-        """Get cache statistics"""
-        if not self.cache_index:
-            return {
-                'total_datasets': 0,
-                'total_files': 0,
-                'total_size_mb': 0,
-                'date_range': 'No cached data',
-                'symbols': [],
-                'last_update': 'Never',
-                'date_count': 0,
-                'cached_dates': []
-            }
-        
-        total_size = 0
-        for item in self.cache_index.values():
-            try:
-                if Path(item['file']).exists():
-                    total_size += Path(item['file']).stat().st_size
-            except:
-                pass
-        
-        dates = [item['date'] for item in self.cache_index.values() if 'date' in item]
-        if dates:
-            min_date = min(dates)
-            max_date = max(dates)
-            date_range = f"{min_date} to {max_date}"
-            unique_dates = sorted(list(set(dates)))
-        else:
-            date_range = 'No dates'
-            unique_dates = []
-        
-        symbols = list(set(item['symbol'] for item in self.cache_index.values() if 'symbol' in item))
-        
-        return {
-            'total_datasets': len(self.cache_index),
-            'total_files': len(self.cache_index),
-            'total_size_mb': total_size / (1024 * 1024),
-            'date_range': date_range,
-            'symbols': symbols,
-            'last_update': self.metadata.get('last_update', 'Unknown'),
-            'date_count': len(unique_dates),
-            'cached_dates': unique_dates
-        }
-    
-    def clear_cache(self):
-        """Clear all cached data"""
-        for cache_key, info in list(self.cache_index.items()):
-            try:
-                cache_file = Path(info['file'])
-                if cache_file.exists():
-                    cache_file.unlink()
-            except:
-                pass
-        
-        self.cache_index = {}
-        self.metadata = {}
-        self.save_cache_index()
-        self.save_metadata()
-    
-    def get_cached_dates(self, symbol: str) -> List[str]:
-        """Get list of cached dates for a symbol"""
-        cached_dates = []
-        for cache_key, info in self.cache_index.items():
-            if info.get('symbol') == symbol and 'date' in info:
-                cached_dates.append(info['date'])
-        return sorted(list(set(cached_dates)))
 
 # ============================================================================
 # PAGE CONFIG & STYLING
 # ============================================================================
 
 st.set_page_config(
-    page_title="NYZTrade Stock Options | Complete",
-    page_icon="🎯",
+    page_title="NYZTrade Unified - GEX & VANNA Dashboard",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -249,11 +41,18 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
     
+    /* Hide GitHub link */
     header[data-testid="stHeader"] a[href*="github"] {
         display: none !important;
     }
     
     button[kind="header"][data-testid="baseButton-header"] svg {
+        display: none !important;
+    }
+    
+    a[aria-label*="GitHub"],
+    a[aria-label*="github"],
+    a[href*="github.com"] {
         display: none !important;
     }
     
@@ -343,6 +142,13 @@ st.markdown("""
     .metric-value.negative { color: var(--accent-red); }
     .metric-value.neutral { color: var(--accent-yellow); }
     
+    .metric-delta {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.8rem;
+        margin-top: 8px;
+        color: var(--text-secondary);
+    }
+    
     .signal-badge {
         display: inline-flex;
         align-items: center;
@@ -372,61 +178,76 @@ st.markdown("""
         border: 1px solid rgba(245, 158, 11, 0.3);
     }
     
-    .screener-card {
-        background: var(--bg-card);
-        border: 2px solid var(--border-color);
-        border-radius: 12px;
-        padding: 20px;
-        margin: 10px 0;
-        transition: all 0.3s ease;
-    }
-    
-    .screener-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
-    }
-    
-    .screener-card.bullish { border-left: 4px solid var(--accent-green); }
-    .screener-card.bearish { border-left: 4px solid var(--accent-red); }
-    
-    .opportunity-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-family: 'Space Grotesk', sans-serif;
-        font-weight: 600;
-        font-size: 0.85rem;
-    }
-    
-    .opportunity-badge.long {
-        background: rgba(16, 185, 129, 0.2);
-        color: var(--accent-green);
-        border: 1px solid rgba(16, 185, 129, 0.4);
-    }
-    
-    .opportunity-badge.short {
-        background: rgba(239, 68, 68, 0.2);
-        color: var(--accent-red);
-        border: 1px solid rgba(239, 68, 68, 0.4);
-    }
-    
-    .history-indicator {
+    .live-indicator {
         display: inline-flex;
         align-items: center;
         gap: 8px;
         padding: 6px 14px;
-        background: rgba(59, 130, 246, 0.1);
-        border: 1px solid rgba(59, 130, 246, 0.3);
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 20px;
+        animation: pulse 2s ease-in-out infinite;
+    }
+    
+    .cached-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        background: rgba(16, 185, 129, 0.1);
+        border: 1px solid rgba(16, 185, 129, 0.3);
         border-radius: 20px;
     }
     
-    .history-dot {
+    .live-dot {
         width: 8px;
         height: 8px;
-        background: var(--accent-blue);
+        background: var(--accent-red);
         border-radius: 50%;
+        animation: blink 1.5s ease-in-out infinite;
+    }
+    
+    .cached-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--accent-green);
+        border-radius: 50%;
+    }
+    
+    .index-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        background: rgba(139, 92, 246, 0.2);
+        border: 1px solid rgba(139, 92, 246, 0.4);
+        border-radius: 12px;
+        color: #a78bfa;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    
+    .stock-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        background: rgba(6, 182, 212, 0.2);
+        border: 1px solid rgba(6, 182, 212, 0.4);
+        border-radius: 12px;
+        color: #22d3ee;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    
+    @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -438,8 +259,14 @@ st.markdown("""
 @dataclass
 class DhanConfig:
     client_id: str = "1100480354"
-    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY5MDY5NDMzLCJhcHBfaWQiOiJjOTNkM2UwOSIsImlhdCI6MTc2ODk4MzAzMywidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.1KED37cyhdeLN9U90tzN3ocxZLSB8Ao4ydERvap4eI8xAQq4PSfo8EvyjYYdBVPX4om3baMWj8-SMbGmMAIUmQ"
+    access_token: str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcxMTQ5OTMwLCJhcHBfaWQiOiJjOTNkM2UwOSIsImlhdCI6MTc3MTA2MzUzMCwidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.jXpg-lS5ejJF7J1qCQnD5wv9zmCoXZuBAyE6k15DZyic56mMUUK7Jsko2tYUTvAKJvJEsJLGW5n45UUEuF7SJg"
 
+# INDEX SECURITY IDs
+DHAN_INDEX_SECURITY_IDS = {
+    "NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 442
+}
+
+# STOCK SECURITY IDs
 DHAN_STOCK_SECURITY_IDS = {
     "RELIANCE": 2885, "TCS": 11536, "HDFCBANK": 1333, "INFY": 1594,
     "ICICIBANK": 4963, "SBIN": 3045, "BHARTIARTL": 1195, "ITC": 1660,
@@ -451,40 +278,196 @@ DHAN_STOCK_SECURITY_IDS = {
     "ADANIPORTS": 3718, "COALINDIA": 20374,
 }
 
-STOCK_CONFIG = {
-    "RELIANCE": {"lot_size": 250, "strike_interval": 10},
-    "TCS": {"lot_size": 150, "strike_interval": 25},
-    "HDFCBANK": {"lot_size": 550, "strike_interval": 10},
-    "INFY": {"lot_size": 300, "strike_interval": 25},
-    "ICICIBANK": {"lot_size": 550, "strike_interval": 10},
-    "SBIN": {"lot_size": 1500, "strike_interval": 5},
-    "BHARTIARTL": {"lot_size": 410, "strike_interval": 10},
-    "ITC": {"lot_size": 1600, "strike_interval": 5},
-    "KOTAKBANK": {"lot_size": 400, "strike_interval": 25},
-    "LT": {"lot_size": 300, "strike_interval": 25},
-    "AXISBANK": {"lot_size": 600, "strike_interval": 10},
-    "HINDUNILVR": {"lot_size": 300, "strike_interval": 25},
-    "WIPRO": {"lot_size": 1200, "strike_interval": 5},
-    "MARUTI": {"lot_size": 75, "strike_interval": 50},
-    "BAJFINANCE": {"lot_size": 125, "strike_interval": 50},
-    "HCLTECH": {"lot_size": 350, "strike_interval": 25},
-    "ASIANPAINT": {"lot_size": 300, "strike_interval": 25},
-    "TITAN": {"lot_size": 300, "strike_interval": 25},
-    "ULTRACEMCO": {"lot_size": 100, "strike_interval": 50},
-    "SUNPHARMA": {"lot_size": 400, "strike_interval": 25},
-    "TATAMOTORS": {"lot_size": 1250, "strike_interval": 5},
-    "TATASTEEL": {"lot_size": 900, "strike_interval": 5},
-    "TECHM": {"lot_size": 400, "strike_interval": 25},
-    "POWERGRID": {"lot_size": 1800, "strike_interval": 5},
-    "NTPC": {"lot_size": 2250, "strike_interval": 5},
-    "ONGC": {"lot_size": 2475, "strike_interval": 5},
-    "M&M": {"lot_size": 300, "strike_interval": 25},
-    "BAJAJFINSV": {"lot_size": 500, "strike_interval": 10},
-    "ADANIPORTS": {"lot_size": 250, "strike_interval": 25},
-    "COALINDIA": {"lot_size": 2040, "strike_interval": 5},
+# INDEX CONFIG
+INDEX_CONFIG = {
+    "NIFTY": {"contract_size": 25, "strike_interval": 50, "type": "INDEX"},
+    "BANKNIFTY": {"contract_size": 15, "strike_interval": 100, "type": "INDEX"},
+    "FINNIFTY": {"contract_size": 40, "strike_interval": 50, "type": "INDEX"},
+    "MIDCPNIFTY": {"contract_size": 75, "strike_interval": 25, "type": "INDEX"},
 }
 
+# STOCK CONFIG
+STOCK_CONFIG = {
+    "RELIANCE": {"lot_size": 250, "strike_interval": 10, "type": "STOCK"},
+    "TCS": {"lot_size": 150, "strike_interval": 25, "type": "STOCK"},
+    "HDFCBANK": {"lot_size": 550, "strike_interval": 10, "type": "STOCK"},
+    "INFY": {"lot_size": 300, "strike_interval": 25, "type": "STOCK"},
+    "ICICIBANK": {"lot_size": 550, "strike_interval": 10, "type": "STOCK"},
+    "SBIN": {"lot_size": 1500, "strike_interval": 5, "type": "STOCK"},
+    "BHARTIARTL": {"lot_size": 410, "strike_interval": 10, "type": "STOCK"},
+    "ITC": {"lot_size": 1600, "strike_interval": 5, "type": "STOCK"},
+    "KOTAKBANK": {"lot_size": 400, "strike_interval": 25, "type": "STOCK"},
+    "LT": {"lot_size": 300, "strike_interval": 25, "type": "STOCK"},
+    "AXISBANK": {"lot_size": 600, "strike_interval": 10, "type": "STOCK"},
+    "HINDUNILVR": {"lot_size": 300, "strike_interval": 25, "type": "STOCK"},
+    "WIPRO": {"lot_size": 1200, "strike_interval": 5, "type": "STOCK"},
+    "MARUTI": {"lot_size": 75, "strike_interval": 50, "type": "STOCK"},
+    "BAJFINANCE": {"lot_size": 125, "strike_interval": 50, "type": "STOCK"},
+    "HCLTECH": {"lot_size": 350, "strike_interval": 25, "type": "STOCK"},
+    "ASIANPAINT": {"lot_size": 300, "strike_interval": 25, "type": "STOCK"},
+    "TITAN": {"lot_size": 300, "strike_interval": 25, "type": "STOCK"},
+    "ULTRACEMCO": {"lot_size": 100, "strike_interval": 50, "type": "STOCK"},
+    "SUNPHARMA": {"lot_size": 400, "strike_interval": 25, "type": "STOCK"},
+    "TATAMOTORS": {"lot_size": 1250, "strike_interval": 5, "type": "STOCK"},
+    "TATASTEEL": {"lot_size": 900, "strike_interval": 5, "type": "STOCK"},
+    "TECHM": {"lot_size": 400, "strike_interval": 25, "type": "STOCK"},
+    "POWERGRID": {"lot_size": 1800, "strike_interval": 5, "type": "STOCK"},
+    "NTPC": {"lot_size": 2250, "strike_interval": 5, "type": "STOCK"},
+    "ONGC": {"lot_size": 2475, "strike_interval": 5, "type": "STOCK"},
+    "M&M": {"lot_size": 300, "strike_interval": 25, "type": "STOCK"},
+    "BAJAJFINSV": {"lot_size": 500, "strike_interval": 10, "type": "STOCK"},
+    "ADANIPORTS": {"lot_size": 250, "strike_interval": 25, "type": "STOCK"},
+    "COALINDIA": {"lot_size": 2040, "strike_interval": 5, "type": "STOCK"},
+}
+
+# Combined config
+SYMBOL_CONFIG = {**INDEX_CONFIG, **STOCK_CONFIG}
+
+# Stock categories for easier selection
+STOCK_CATEGORIES = {
+    "Banking & Finance": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "BAJFINANCE", "BAJAJFINSV"],
+    "IT & Technology": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
+    "Energy & Power": ["RELIANCE", "ONGC", "POWERGRID", "NTPC", "COALINDIA"],
+    "Auto & Industrial": ["MARUTI", "TATAMOTORS", "M&M", "LT"],
+    "FMCG & Consumer": ["HINDUNILVR", "ITC", "ASIANPAINT", "TITAN"],
+    "Others": ["SUNPHARMA", "TATASTEEL", "BHARTIARTL", "ADANIPORTS", "ULTRACEMCO"]
+}
+
+# Indian timezone
 IST = pytz.timezone('Asia/Kolkata')
+
+# Market hours (IST)
+MARKET_OPEN_HOUR = 9
+MARKET_OPEN_MINUTE = 15
+MARKET_CLOSE_HOUR = 15
+MARKET_CLOSE_MINUTE = 30
+
+# ============================================================================
+# CACHE MANAGER - Smart Caching System
+# ============================================================================
+
+class CacheManager:
+    """
+    Smart caching system that:
+    - Caches historical (non-current day) data permanently
+    - Keeps current trading day data live with incremental updates
+    """
+    
+    def __init__(self):
+        self.cache_dir = "/tmp/nyztrade_unified_cache"
+        os.makedirs(self.cache_dir, exist_ok=True)
+    
+    def _generate_cache_key(self, symbol: str, date: str, strikes: List[str], 
+                           interval: str, expiry_code: int, expiry_flag: str, instrument_type: str) -> str:
+        """Generate unique cache key for a data request"""
+        key_data = f"{symbol}_{date}_{sorted(strikes)}_{interval}_{expiry_code}_{expiry_flag}_{instrument_type}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+    
+    def _get_cache_path(self, cache_key: str) -> str:
+        """Get file path for cache"""
+        return os.path.join(self.cache_dir, f"{cache_key}.pkl")
+    
+    def _get_meta_path(self, cache_key: str) -> str:
+        """Get file path for cache metadata"""
+        return os.path.join(self.cache_dir, f"{cache_key}_meta.json")
+    
+    def is_current_trading_day(self, target_date: str) -> bool:
+        """Check if target date is current trading day"""
+        now_ist = datetime.now(IST)
+        target_dt = datetime.strptime(target_date, '%Y-%m-%d').date()
+        return target_dt == now_ist.date()
+    
+    def is_market_hours(self) -> bool:
+        """Check if current time is within market hours"""
+        now_ist = datetime.now(IST)
+        market_open = now_ist.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
+        market_close = now_ist.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0)
+        return market_open <= now_ist <= market_close
+    
+    def get_cached_data(self, symbol: str, date: str, strikes: List[str], 
+                        interval: str, expiry_code: int, expiry_flag: str, 
+                        instrument_type: str) -> Tuple[Optional[pd.DataFrame], Optional[Dict], Optional[datetime]]:
+        """Get cached data if available."""
+        cache_key = self._generate_cache_key(symbol, date, strikes, interval, expiry_code, expiry_flag, instrument_type)
+        cache_path = self._get_cache_path(cache_key)
+        meta_path = self._get_meta_path(cache_key)
+        
+        if not os.path.exists(cache_path) or not os.path.exists(meta_path):
+            return None, None, None
+        
+        try:
+            df = pd.read_pickle(cache_path)
+            with open(meta_path, 'r') as f:
+                meta = json.load(f)
+            
+            if len(df) > 0 and 'timestamp' in df.columns:
+                last_timestamp = df['timestamp'].max()
+                if isinstance(last_timestamp, str):
+                    last_timestamp = pd.to_datetime(last_timestamp)
+            else:
+                last_timestamp = None
+            
+            return df, meta, last_timestamp
+        except Exception as e:
+            st.warning(f"Cache read error: {e}")
+            return None, None, None
+    
+    def save_to_cache(self, df: pd.DataFrame, meta: Dict, symbol: str, date: str, 
+                      strikes: List[str], interval: str, expiry_code: int, expiry_flag: str,
+                      instrument_type: str):
+        """Save data to cache"""
+        cache_key = self._generate_cache_key(symbol, date, strikes, interval, expiry_code, expiry_flag, instrument_type)
+        cache_path = self._get_cache_path(cache_key)
+        meta_path = self._get_meta_path(cache_key)
+        
+        try:
+            df.to_pickle(cache_path)
+            with open(meta_path, 'w') as f:
+                json.dump(meta, f)
+        except Exception as e:
+            st.warning(f"Cache write error: {e}")
+    
+    def merge_incremental_data(self, cached_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
+        """Merge new data with cached data, avoiding duplicates"""
+        if cached_df is None or len(cached_df) == 0:
+            return new_df
+        
+        if new_df is None or len(new_df) == 0:
+            return cached_df
+        
+        combined = pd.concat([cached_df, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=['timestamp', 'strike'], keep='last')
+        combined = combined.sort_values(['timestamp', 'strike']).reset_index(drop=True)
+        
+        return combined
+    
+    def clear_cache(self, symbol: str = None, date: str = None):
+        """Clear cache - optionally for specific symbol/date"""
+        try:
+            for file in os.listdir(self.cache_dir):
+                file_path = os.path.join(self.cache_dir, file)
+                if symbol is None and date is None:
+                    os.remove(file_path)
+                elif file.startswith(f"{symbol}_{date}"):
+                    os.remove(file_path)
+        except Exception as e:
+            st.warning(f"Cache clear error: {e}")
+    
+    def get_cache_stats(self) -> Dict:
+        """Get cache statistics"""
+        try:
+            files = os.listdir(self.cache_dir)
+            pkl_files = [f for f in files if f.endswith('.pkl')]
+            total_size = sum(os.path.getsize(os.path.join(self.cache_dir, f)) for f in pkl_files)
+            return {
+                'num_entries': len(pkl_files),
+                'total_size_mb': total_size / (1024 * 1024)
+            }
+        except:
+            return {'num_entries': 0, 'total_size_mb': 0}
+
+# Initialize cache manager
+cache_manager = CacheManager()
 
 # ============================================================================
 # BLACK-SCHOLES CALCULATOR (ENHANCED WITH VANNA & CHARM)
@@ -610,38 +593,18 @@ def identify_gamma_flip_zones(df: pd.DataFrame, spot_price: float) -> List[Dict]
                 'direction': direction,
                 'arrow': arrow,
                 'color': color,
-                'flip_type': 'Positive→Negative' if current_gex > 0 else 'Negative→Positive',
-                'distance_from_spot': abs(flip_strike - spot_price),
-                'distance_pct': abs(flip_strike - spot_price) / spot_price * 100
+                'flip_type': 'Positive→Negative' if current_gex > 0 else 'Negative→Positive'
             })
     
     return flip_zones
 
-def analyze_flip_zone_position(spot_price: float, flip_zones: List[Dict]) -> str:
-    """Analyze spot position relative to flip zones"""
-    if not flip_zones:
-        return "No gamma flip zones detected"
-    
-    nearest_flip = min(flip_zones, key=lambda x: x['distance_from_spot'])
-    
-    above_flip = any(spot_price > zone['strike'] for zone in flip_zones)
-    below_flip = any(spot_price < zone['strike'] for zone in flip_zones)
-    
-    if above_flip and not below_flip:
-        return "Above all flip zones"
-    elif below_flip and not above_flip:
-        return "Below all flip zones"
-    else:
-        return "Between flip zones"
-
 # ============================================================================
-# DHAN STOCK OPTIONS FETCHER (ENHANCED WITH CACHE & ALL GREEKS)
+# UNIFIED DATA FETCHER (INDEX + STOCK OPTIONS)
 # ============================================================================
 
-class DhanStockOptionsFetcher:
-    def __init__(self, config: DhanConfig, cache_manager: DataCacheManager = None):
+class UnifiedOptionsFetcher:
+    def __init__(self, config: DhanConfig):
         self.config = config
-        self.cache_manager = cache_manager
         self.headers = {
             'access-token': config.access_token,
             'client-id': config.client_id,
@@ -651,20 +614,46 @@ class DhanStockOptionsFetcher:
         self.bs_calc = BlackScholesCalculator()
         self.risk_free_rate = 0.07
     
+    def get_instrument_type(self, symbol: str) -> str:
+        """Determine if symbol is INDEX or STOCK"""
+        if symbol in DHAN_INDEX_SECURITY_IDS:
+            return "INDEX"
+        elif symbol in DHAN_STOCK_SECURITY_IDS:
+            return "STOCK"
+        else:
+            return "UNKNOWN"
+    
+    def get_security_id(self, symbol: str) -> int:
+        """Get security ID for symbol"""
+        if symbol in DHAN_INDEX_SECURITY_IDS:
+            return DHAN_INDEX_SECURITY_IDS[symbol]
+        elif symbol in DHAN_STOCK_SECURITY_IDS:
+            return DHAN_STOCK_SECURITY_IDS[symbol]
+        else:
+            return None
+    
+    def get_contract_size(self, symbol: str) -> int:
+        """Get contract/lot size for symbol"""
+        config = SYMBOL_CONFIG.get(symbol, {})
+        return config.get('contract_size', config.get('lot_size', 50))
+    
     def fetch_rolling_data(self, symbol: str, from_date: str, to_date: str, 
                           strike_type: str = "ATM", option_type: str = "CALL", 
-                          interval: str = "60", expiry_code: int = 1, expiry_flag: str = "MONTH"):
-        """Fetch rolling options data"""
+                          interval: str = "60", expiry_code: int = 1, expiry_flag: str = "WEEK"):
+        """Fetch historical rolling options data for both INDEX and STOCK"""
         try:
-            security_id = DHAN_STOCK_SECURITY_IDS.get(symbol)
-            if not security_id:
+            security_id = self.get_security_id(symbol)
+            if security_id is None:
                 return None
+            
+            instrument_type = self.get_instrument_type(symbol)
+            instrument = "OPTIDX" if instrument_type == "INDEX" else "OPTSTK"
             
             payload = {
                 "exchangeSegment": "NSE_FNO",
                 "interval": interval,
                 "securityId": security_id,
-                "instrument": "OPTSTK",
+                "instrument": instrument,
                 "expiryFlag": expiry_flag,
                 "expiryCode": expiry_code,
                 "strike": strike_type,
@@ -684,44 +673,36 @@ class DhanStockOptionsFetcher:
             if response.status_code == 200:
                 return response.json().get('data', {})
             return None
-        except:
+        except Exception as e:
+            st.error(f"API Error: {str(e)}")
             return None
     
-    def fetch_with_cache(self, symbol: str, target_date: str, strikes: List[str], 
-                        interval: str, expiry_code: int, expiry_flag: str) -> tuple:
-        """
-        Fetch data with caching - checks cache first, fetches only if needed
-        Returns: (df, meta, from_cache_flag)
-        """
-        if self.cache_manager is None:
-            df, meta = self.process_historical_data(symbol, target_date, strikes, interval, expiry_code, expiry_flag)
-            return df, meta, False
-        
-        cache_key = self.cache_manager.get_cache_key(
-            symbol, target_date, strikes, interval, expiry_code, expiry_flag
-        )
-        
-        if self.cache_manager.is_cached(cache_key):
-            df, meta = self.cache_manager.load_from_cache(cache_key)
-            if df is not None:
-                return df, meta, True
-        
-        df, meta = self.process_historical_data(symbol, target_date, strikes, interval, expiry_code, expiry_flag)
-        
-        if df is not None and len(df) > 0:
-            self.cache_manager.save_to_cache(cache_key, df, meta)
-        
-        return df, meta, False
-    
     def process_historical_data(self, symbol: str, target_date: str, strikes: List[str], 
-                               interval: str = "60", expiry_code: int = 1, expiry_flag: str = "MONTH"):
-        """Process historical stock options data with FULL GREEKS"""
+                               interval: str = "60", expiry_code: int = 1, expiry_flag: str = "WEEK",
+                               from_timestamp: datetime = None, incremental: bool = False):
+        """Process historical data with VANNA and CHARM for both INDEX and STOCK options."""
+        
         target_dt = datetime.strptime(target_date, '%Y-%m-%d')
-        from_date = (target_dt - timedelta(days=2)).strftime('%Y-%m-%d')
+        
+        if incremental and from_timestamp:
+            from_date = from_timestamp.strftime('%Y-%m-%d')
+        else:
+            from_date = (target_dt - timedelta(days=2)).strftime('%Y-%m-%d')
+        
         to_date = (target_dt + timedelta(days=2)).strftime('%Y-%m-%d')
         
-        config = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
-        lot_size = config["lot_size"]
+        instrument_type = self.get_instrument_type(symbol)
+        contract_size = self.get_contract_size(symbol)
+        
+        # Determine time to expiry based on expiry type
+        if expiry_flag == "WEEK":
+            time_to_expiry = 7 / 365
+        else:  # MONTH
+            time_to_expiry = 30 / 365
+        
+        # Determine scaling factor (Billions for Index, Crores for Stocks)
+        scaling_factor = 1e9 if instrument_type == "INDEX" else 1e7
+        unit_label = "B" if instrument_type == "INDEX" else "Cr"
         
         all_data = []
         progress_bar = st.progress(0)
@@ -731,19 +712,20 @@ class DhanStockOptionsFetcher:
         current_step = 0
         
         for strike_type in strikes:
-            status_text.text(f"Fetching {symbol} {strike_type}...")
+            mode_text = "Incremental update" if incremental else "Full fetch"
+            status_text.text(f"[{mode_text}] Fetching {symbol} {strike_type} ({expiry_flag} Expiry {expiry_code})...")
             
             call_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "CALL", 
                                                 interval, expiry_code, expiry_flag)
             current_step += 1
             progress_bar.progress(current_step / total_steps)
-            time.sleep(1)
+            time.sleep(0.3)
             
             put_data = self.fetch_rolling_data(symbol, from_date, to_date, strike_type, "PUT", 
                                                interval, expiry_code, expiry_flag)
             current_step += 1
             progress_bar.progress(current_step / total_steps)
-            time.sleep(1)
+            time.sleep(0.3)
             
             if not call_data or not put_data:
                 continue
@@ -764,6 +746,9 @@ class DhanStockOptionsFetcher:
                     if dt_ist.date() != target_dt.date():
                         continue
                     
+                    if incremental and from_timestamp and dt_ist <= from_timestamp:
+                        continue
+                    
                     spot_price = ce_data.get('spot', [0])[i] if i < len(ce_data.get('spot', [])) else 0
                     strike_price = ce_data.get('strike', [0])[i] if i < len(ce_data.get('strike', [])) else 0
                     
@@ -777,7 +762,6 @@ class DhanStockOptionsFetcher:
                     call_iv = ce_data.get('iv', [15])[i] if i < len(ce_data.get('iv', [])) else 15
                     put_iv = pe_data.get('iv', [15])[i] if i < len(pe_data.get('iv', [])) else 15
                     
-                    time_to_expiry = 30 / 365
                     call_iv_dec = call_iv / 100 if call_iv > 1 else call_iv
                     put_iv_dec = put_iv / 100 if put_iv > 1 else put_iv
                     
@@ -793,16 +777,16 @@ class DhanStockOptionsFetcher:
                     call_charm = self.bs_calc.calculate_charm(spot_price, strike_price, time_to_expiry, self.risk_free_rate, call_iv_dec, 'call')
                     put_charm = self.bs_calc.calculate_charm(spot_price, strike_price, time_to_expiry, self.risk_free_rate, put_iv_dec, 'put')
                     
-                    # Calculate exposures (in Crores)
-                    call_gex = (call_oi * call_gamma * spot_price**2 * lot_size) / 1e7
-                    put_gex = -(put_oi * put_gamma * spot_price**2 * lot_size) / 1e7
-                    call_dex = (call_oi * call_delta * spot_price * lot_size) / 1e7
-                    put_dex = (put_oi * put_delta * spot_price * lot_size) / 1e7
+                    # Calculate exposures
+                    call_gex = (call_oi * call_gamma * spot_price**2 * contract_size) / scaling_factor
+                    put_gex = -(put_oi * put_gamma * spot_price**2 * contract_size) / scaling_factor
+                    call_dex = (call_oi * call_delta * spot_price * contract_size) / scaling_factor
+                    put_dex = (put_oi * put_delta * spot_price * contract_size) / scaling_factor
                     
-                    call_vanna_exp = (call_oi * call_vanna * spot_price * lot_size) / 1e7
-                    put_vanna_exp = (put_oi * put_vanna * spot_price * lot_size) / 1e7
-                    call_charm_exp = (call_oi * call_charm * spot_price * lot_size) / 1e7
-                    put_charm_exp = (put_oi * put_charm * spot_price * lot_size) / 1e7
+                    call_vanna_exp = (call_oi * call_vanna * spot_price * contract_size) / scaling_factor
+                    put_vanna_exp = (put_oi * put_vanna * spot_price * contract_size) / scaling_factor
+                    call_charm_exp = (call_oi * call_charm * spot_price * contract_size) / scaling_factor
+                    put_charm_exp = (put_oi * put_charm * spot_price * contract_size) / scaling_factor
                     
                     all_data.append({
                         'timestamp': dt_ist,
@@ -817,8 +801,6 @@ class DhanStockOptionsFetcher:
                         'total_volume': call_volume + put_volume,
                         'call_iv': call_iv,
                         'put_iv': put_iv,
-                        'call_gamma': call_gamma,
-                        'put_gamma': put_gamma,
                         'call_gex': call_gex,
                         'put_gex': put_gex,
                         'net_gex': call_gex + put_gex,
@@ -833,7 +815,7 @@ class DhanStockOptionsFetcher:
                         'net_charm': call_charm_exp + put_charm_exp,
                     })
                     
-                except:
+                except Exception as e:
                     continue
         
         progress_bar.empty()
@@ -885,7 +867,6 @@ class DhanStockOptionsFetcher:
                         
                         spot = row['spot_price']
                         strike_price = row['strike']
-                        time_to_expiry = 30 / 365
                         call_iv_dec = row['call_iv'] / 100 if row['call_iv'] > 1 else row['call_iv']
                         put_iv_dec = row['put_iv'] / 100 if row['put_iv'] > 1 else row['put_iv']
                         
@@ -895,110 +876,29 @@ class DhanStockOptionsFetcher:
                         call_oi_change = row['call_oi_change']
                         put_oi_change = row['put_oi_change']
                         
-                        call_oi_gex_val = (call_oi_change * call_gamma * spot**2 * lot_size) / 1e7
-                        put_oi_gex_val = -(put_oi_change * put_gamma * spot**2 * lot_size) / 1e7
+                        call_oi_gex_val = (call_oi_change * call_gamma * spot**2 * contract_size) / scaling_factor
+                        put_oi_gex_val = -(put_oi_change * put_gamma * spot**2 * contract_size) / scaling_factor
                         
                         df.loc[idx, 'call_oi_gex'] = call_oi_gex_val
                         df.loc[idx, 'put_oi_gex'] = put_oi_gex_val
                         df.loc[idx, 'net_oi_gex'] = call_oi_gex_val + put_oi_gex_val
-                    except:
+                    except Exception as e:
                         continue
-        except:
+        except Exception as e:
             pass
         
+        # Calculate hedging pressure
         max_gex = df['net_gex'].abs().max()
         df['hedging_pressure'] = (df['net_gex'] / max_gex * 100) if max_gex > 0 else 0
         
-        # ============================================================================
-        # PREDICTIVE GEX MODELS
-        # ============================================================================
-        
-        df['volume_weighted_gex'] = 0.0
-        df['support_resistance_strength'] = 0.0
-        
-        # VANNA/CHARM ADJUSTED GEX
-        df['vanna_adj_gex_vol_up'] = 0.0
-        df['vanna_adj_gex_vol_down'] = 0.0
-        df['charm_adj_gex_2hr'] = 0.0
-        df['charm_adj_gex_4hr'] = 0.0
-        
-        try:
-            for idx, row in df.iterrows():
-                try:
-                    spot = row['spot_price']
-                    strike = row['strike']
-                    net_gex = row['net_gex']
-                    total_vol = row['total_volume']
-                    timestamp = row['timestamp']
-                    timestamp_mask = df['timestamp'] == timestamp
-                    
-                    net_vanna = row['net_vanna']
-                    net_charm = row['net_charm']
-                    
-                    # Volume-Weighted GEX
-                    total_vol_at_time = df[timestamp_mask]['total_volume'].sum()
-                    if total_vol_at_time > 0:
-                        volume_weight = total_vol / total_vol_at_time
-                        vwgex = net_gex * volume_weight * 100
-                        df.loc[idx, 'volume_weighted_gex'] = vwgex
-                    
-                    # Support/Resistance Strength
-                    distance_from_spot = abs(strike - spot)
-                    distance_pct = (distance_from_spot / spot) * 100
-                    
-                    if distance_pct > 0:
-                        proximity_factor = 1 / (1 + distance_pct)
-                    else:
-                        proximity_factor = 1.0
-                    
-                    avg_volume = df[timestamp_mask]['total_volume'].mean()
-                    volume_factor = (total_vol / avg_volume) if avg_volume > 0 else 1
-                    
-                    strength = abs(net_gex) * proximity_factor * volume_factor
-                    df.loc[idx, 'support_resistance_strength'] = strength
-                    
-                    # VANNA-Adjusted GEX
-                    vol_change_up = 0.05
-                    vanna_impact_up = net_vanna * vol_change_up
-                    vanna_adj_gex_up = net_gex + vanna_impact_up
-                    df.loc[idx, 'vanna_adj_gex_vol_up'] = vanna_adj_gex_up
-                    
-                    vol_change_down = -0.05
-                    vanna_impact_down = net_vanna * vol_change_down
-                    vanna_adj_gex_down = net_gex + vanna_impact_down
-                    df.loc[idx, 'vanna_adj_gex_vol_down'] = vanna_adj_gex_down
-                    
-                    # CHARM-Adjusted GEX
-                    time_decay_2hr = 2 / 24
-                    charm_impact_2hr = net_charm * time_decay_2hr * 10
-                    charm_adj_gex_2hr = net_gex + charm_impact_2hr
-                    df.loc[idx, 'charm_adj_gex_2hr'] = charm_adj_gex_2hr
-                    
-                    time_decay_4hr = 4 / 24
-                    charm_impact_4hr = net_charm * time_decay_4hr * 10
-                    charm_adj_gex_4hr = net_gex + charm_impact_4hr
-                    df.loc[idx, 'charm_adj_gex_4hr'] = charm_adj_gex_4hr
-                    
-                except:
-                    continue
-        except:
-            pass
-        
+        # Get latest data point for metadata
         latest = df.sort_values('timestamp').iloc[-1]
         spot_prices = df['spot_price'].unique()
         spot_variation = (spot_prices.max() - spot_prices.min()) / spot_prices.mean() * 100
         
-        df_latest_time = df[df['timestamp'] == df['timestamp'].max()]
-        strike_volumes = df_latest_time.groupby('strike').agg({
-            'call_volume': 'sum',
-            'put_volume': 'sum',
-            'total_volume': 'sum'
-        }).reset_index()
-        strike_volumes = strike_volumes.sort_values('total_volume', ascending=False)
-        top_volume_strikes = strike_volumes.head(5).to_dict('records')
-        
         meta = {
             'symbol': symbol,
+            'instrument_type': instrument_type,
             'date': target_date,
             'spot_price': latest['spot_price'],
             'spot_price_min': spot_prices.min(),
@@ -1010,17 +910,744 @@ class DhanStockOptionsFetcher:
             'interval': f"{interval} minutes" if interval != "1" else "1 minute",
             'expiry_code': expiry_code,
             'expiry_flag': expiry_flag,
-            'lot_size': lot_size,
-            'top_volume_strikes': top_volume_strikes
+            'contract_size': contract_size,
+            'unit_label': unit_label,
+            'fetch_time': datetime.now(IST).strftime('%H:%M:%S IST'),
+            'is_incremental': incremental
         }
         
         return df, meta
 
 # ============================================================================
-# VISUALIZATION FUNCTIONS (SIMPLIFIED - ONLY KEY CHARTS)
+# SMART DATA FETCHER - Handles caching logic
 # ============================================================================
 
-def create_intraday_timeline(df: pd.DataFrame, metadata: Dict) -> go.Figure:
+def fetch_data_with_smart_cache(symbol: str, target_date: str, strikes: List[str], 
+                                 interval: str, expiry_code: int, expiry_flag: str,
+                                 force_refresh: bool = False) -> Tuple[Optional[pd.DataFrame], Optional[Dict], str]:
+    """Smart data fetching with caching for both INDEX and STOCK options."""
+    fetcher = UnifiedOptionsFetcher(DhanConfig())
+    instrument_type = fetcher.get_instrument_type(symbol)
+    
+    is_current_day = cache_manager.is_current_trading_day(target_date)
+    is_market_open = cache_manager.is_market_hours()
+    
+    cached_df, cached_meta, last_timestamp = cache_manager.get_cached_data(
+        symbol, target_date, strikes, interval, expiry_code, expiry_flag, instrument_type
+    )
+    
+    # CASE 1: Historical data (not current trading day)
+    if not is_current_day:
+        if cached_df is not None and not force_refresh:
+            cached_meta['fetch_mode'] = 'cached'
+            cached_meta['fetch_time'] = datetime.now(IST).strftime('%H:%M:%S IST')
+            return cached_df, cached_meta, 'cached'
+        else:
+            df, meta = fetcher.process_historical_data(
+                symbol, target_date, strikes, interval, expiry_code, expiry_flag
+            )
+            if df is not None:
+                cache_manager.save_to_cache(df, meta, symbol, target_date, strikes, interval, expiry_code, expiry_flag, instrument_type)
+            return df, meta, 'full_fetch'
+    
+    # CASE 2: Current trading day
+    else:
+        if not is_market_open and cached_df is not None and not force_refresh:
+            cached_meta['fetch_mode'] = 'cached'
+            cached_meta['fetch_time'] = datetime.now(IST).strftime('%H:%M:%S IST')
+            return cached_df, cached_meta, 'cached'
+        
+        if cached_df is not None and last_timestamp is not None and not force_refresh:
+            new_df, new_meta = fetcher.process_historical_data(
+                symbol, target_date, strikes, interval, expiry_code, expiry_flag,
+                from_timestamp=last_timestamp, incremental=True
+            )
+            
+            if new_df is not None and len(new_df) > 0:
+                merged_df = cache_manager.merge_incremental_data(cached_df, new_df)
+                
+                merged_meta = new_meta.copy()
+                merged_meta['total_records'] = len(merged_df)
+                merged_meta['time_range'] = f"{merged_df['time'].min()} - {merged_df['time'].max()}"
+                merged_meta['fetch_mode'] = 'incremental'
+                merged_meta['new_records'] = len(new_df)
+                
+                cache_manager.save_to_cache(merged_df, merged_meta, symbol, target_date, strikes, interval, expiry_code, expiry_flag, instrument_type)
+                
+                return merged_df, merged_meta, 'incremental'
+            else:
+                cached_meta['fetch_mode'] = 'cached'
+                cached_meta['fetch_time'] = datetime.now(IST).strftime('%H:%M:%S IST')
+                return cached_df, cached_meta, 'cached'
+        
+        df, meta = fetcher.process_historical_data(
+            symbol, target_date, strikes, interval, expiry_code, expiry_flag
+        )
+        if df is not None:
+            cache_manager.save_to_cache(df, meta, symbol, target_date, strikes, interval, expiry_code, expiry_flag, instrument_type)
+        return df, meta, 'full_fetch'
+
+# ============================================================================
+# ENHANCED OVERLAY VISUALIZATIONS
+# ============================================================================
+
+def create_enhanced_vanna_overlay_chart(df: pd.DataFrame, spot_price: float, unit_label: str = "B") -> go.Figure:
+    """Enhanced VANNA Overlay: Original vs Enhanced OI VANNA with Greeks & Volume adjustments"""
+    df_sorted = df.sort_values('strike').reset_index(drop=True)
+    
+    required_cols = ['net_vanna', 'call_oi_change', 'put_oi_change', 'total_volume', 'call_iv', 'put_iv']
+    for col in required_cols:
+        if col not in df_sorted.columns:
+            df_sorted[col] = 0.0
+        df_sorted[col] = df_sorted[col].fillna(0)
+    
+    df_sorted['enhanced_oi_vanna'] = 0.0
+    
+    bs_calc = BlackScholesCalculator()
+    risk_free_rate = 0.07
+    contract_size = 25  # Default
+    
+    try:
+        total_volume_at_time = df_sorted['total_volume'].sum()
+        
+        for idx, row in df_sorted.iterrows():
+            try:
+                spot = row.get('spot_price', spot_price)
+                strike = row['strike']
+                call_oi_change = row['call_oi_change']
+                put_oi_change = row['put_oi_change']
+                volume = row['total_volume']
+                call_iv = row['call_iv']
+                put_iv = row['put_iv']
+                
+                if spot <= 0 or strike <= 0:
+                    continue
+                
+                time_to_expiry = 7 / 365
+                
+                call_iv_dec = call_iv / 100 if call_iv > 1 else call_iv
+                put_iv_dec = put_iv / 100 if put_iv > 1 else put_iv
+                
+                call_vanna_base = bs_calc.calculate_vanna(spot, strike, time_to_expiry, risk_free_rate, call_iv_dec)
+                put_vanna_base = bs_calc.calculate_vanna(spot, strike, time_to_expiry, risk_free_rate, put_iv_dec)
+                
+                volume_weight = 1.0
+                if total_volume_at_time > 0:
+                    volume_weight = 1 + (volume / total_volume_at_time)
+                
+                avg_iv = (call_iv_dec + put_iv_dec) / 2
+                iv_adjustment = 1 + (avg_iv * 3)
+                
+                distance_pct = abs(strike - spot) / spot
+                distance_weight = 1 / (1 + distance_pct * 1.5)
+                
+                vanna_multiplier = 2.0
+                
+                call_vanna_enhanced = call_vanna_base * volume_weight * iv_adjustment * distance_weight * vanna_multiplier
+                put_vanna_enhanced = put_vanna_base * volume_weight * iv_adjustment * distance_weight * vanna_multiplier
+                
+                scaling = 1e9 if unit_label == "B" else 1e7
+                call_oi_vanna_enhanced = (call_oi_change * call_vanna_enhanced * spot * contract_size) / scaling
+                put_oi_vanna_enhanced = (put_oi_change * put_vanna_enhanced * spot * contract_size) / scaling
+                
+                df_sorted.loc[idx, 'enhanced_oi_vanna'] = call_oi_vanna_enhanced + put_oi_vanna_enhanced
+                
+            except Exception as e:
+                continue
+    except Exception as e:
+        st.warning(f"Error calculating enhanced OI VANNA: {e}")
+    
+    vanna_sum = abs(df_sorted['net_vanna'].sum())
+    enhanced_oi_vanna_sum = abs(df_sorted['enhanced_oi_vanna'].sum())
+    has_vanna_data = vanna_sum > 0.000001
+    has_enhanced_oi_vanna_data = enhanced_oi_vanna_sum > 0.000001
+    
+    max_vanna = df_sorted['net_vanna'].abs().max()
+    max_enhanced_oi_vanna = df_sorted['enhanced_oi_vanna'].abs().max()
+    
+    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
+    
+    fig = go.Figure()
+    
+    if not has_vanna_data:
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            text="❌ No VANNA Data Found<br>Check data source",
+            showarrow=False,
+            bgcolor="rgba(255,0,0,0.3)",
+            bordercolor="red",
+            borderwidth=2,
+            font=dict(color="white", size=16),
+            align="center"
+        )
+    else:
+        original_vanna_colors = ['#06b6d4' if x > 0 else '#0891b2' for x in df_sorted['net_vanna']]
+        fig.add_trace(go.Bar(
+            y=df_sorted['strike'],
+            x=df_sorted['net_vanna'],
+            orientation='h',
+            marker=dict(
+                color=original_vanna_colors,
+                opacity=0.6,
+                line=dict(width=0)
+            ),
+            name=f'Original VANNA - Max: {max_vanna:.4f}{unit_label}',
+            hovertemplate=f'Strike: %{{y:,.0f}}<br>Original VANNA: %{{x:.4f}}{unit_label}<extra></extra>'
+        ))
+        
+        if has_enhanced_oi_vanna_data:
+            enhanced_vanna_colors = ['#ec4899' if x > 0 else '#be185d' for x in df_sorted['enhanced_oi_vanna']]
+            fig.add_trace(go.Bar(
+                y=df_sorted['strike'],
+                x=df_sorted['enhanced_oi_vanna'],
+                orientation='h',
+                marker=dict(
+                    color=enhanced_vanna_colors,
+                    opacity=0.85,
+                    line=dict(color='white', width=1)
+                ),
+                name=f'Enhanced OI VANNA (Greeks+Vol) - Max: {max_enhanced_oi_vanna:.4f}{unit_label}',
+                hovertemplate=f'Strike: %{{y:,.0f}}<br>Enhanced OI VANNA: %{{x:.4f}}{unit_label}<extra></extra>'
+            ))
+    
+    fig.add_hline(y=spot_price, line_dash="dash", line_color="white", line_width=3,
+                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
+                  annotation=dict(font=dict(size=12, color="white", family="Arial Black")))
+    
+    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=2)
+    
+    for zone in flip_zones:
+        fig.add_hline(
+            y=zone['strike'],
+            line_dash="dot",
+            line_color=zone['color'],
+            line_width=1,
+            opacity=0.3,
+            annotation_text=f"🔄 {zone['strike']:,.0f}",
+            annotation_position="left",
+            annotation=dict(
+                font=dict(size=9, color=zone['color']),
+                bgcolor='rgba(0,0,0,0.5)',
+                bordercolor=zone['color'],
+                borderwidth=1
+            )
+        )
+    
+    fig.update_layout(
+        title=dict(
+            text="<b>🌊 Enhanced VANNA Overlay: Original vs Enhanced OI VANNA</b><br><sub>Cyan/Teal = All effects | Pink/Magenta = OI changes with Volume+IV+Distance+VANNA adjustments | ✏️ Use toolbar to draw</sub>", 
+            font=dict(size=18, color='white')
+        ),
+        xaxis_title=f"VANNA (dDelta/dVol) [{unit_label}]",
+        yaxis_title="Strike Price",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=700,
+        barmode='overlay',
+        bargap=0.15,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(color='white', size=11),
+            bgcolor='rgba(0,0,0,0.8)',
+            bordercolor='white',
+            borderwidth=1
+        ),
+        hovermode='closest',
+        xaxis=dict(
+            gridcolor='rgba(128,128,128,0.2)', 
+            showgrid=True,
+            zeroline=True,
+            zerolinecolor='rgba(255,255,255,0.3)',
+            zerolinewidth=2
+        ),
+        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
+        margin=dict(l=80, r=80, t=100, b=80),
+        dragmode='drawline',
+        newshape=dict(
+            line=dict(color='#f59e0b', width=2),
+            fillcolor='rgba(245, 158, 11, 0.2)'
+        )
+    )
+    
+    fig.update_layout(
+        modebar_add=[
+            'drawline',
+            'drawopenpath',
+            'drawclosedpath',
+            'drawcircle',
+            'drawrect',
+            'eraseshape'
+        ],
+        modebar=dict(
+            bgcolor='rgba(0,0,0,0.5)',
+            color='#94a3b8',
+            activecolor='#f59e0b'
+        )
+    )
+    
+    return fig
+
+def create_enhanced_gex_overlay_chart(df: pd.DataFrame, spot_price: float, unit_label: str = "B") -> go.Figure:
+    """Enhanced GEX Overlay: Original vs Enhanced OI GEX with Greeks & Volume adjustments"""
+    df_sorted = df.sort_values('strike').reset_index(drop=True)
+    
+    required_cols = ['net_gex', 'call_oi_change', 'put_oi_change', 'total_volume', 'call_iv', 'put_iv']
+    for col in required_cols:
+        if col not in df_sorted.columns:
+            df_sorted[col] = 0.0
+        df_sorted[col] = df_sorted[col].fillna(0)
+    
+    df_sorted['enhanced_oi_gex'] = 0.0
+    
+    bs_calc = BlackScholesCalculator()
+    risk_free_rate = 0.07
+    contract_size = 25  # Default
+    
+    try:
+        total_volume_at_time = df_sorted['total_volume'].sum()
+        
+        for idx, row in df_sorted.iterrows():
+            try:
+                spot = row.get('spot_price', spot_price)
+                strike = row['strike']
+                call_oi_change = row['call_oi_change']
+                put_oi_change = row['put_oi_change']
+                volume = row['total_volume']
+                call_iv = row['call_iv']
+                put_iv = row['put_iv']
+                
+                if spot <= 0 or strike <= 0:
+                    continue
+                
+                time_to_expiry = 7 / 365
+                
+                call_iv_dec = call_iv / 100 if call_iv > 1 else call_iv
+                put_iv_dec = put_iv / 100 if put_iv > 1 else put_iv
+                
+                call_gamma_base = bs_calc.calculate_gamma(spot, strike, time_to_expiry, risk_free_rate, call_iv_dec)
+                put_gamma_base = bs_calc.calculate_gamma(spot, strike, time_to_expiry, risk_free_rate, put_iv_dec)
+                
+                volume_weight = 1.0
+                if total_volume_at_time > 0:
+                    volume_weight = 1 + (volume / total_volume_at_time)
+                
+                avg_iv = (call_iv_dec + put_iv_dec) / 2
+                iv_adjustment = 1 + (avg_iv * 2)
+                
+                distance_pct = abs(strike - spot) / spot
+                distance_weight = 1 / (1 + distance_pct * 2)
+                
+                greeks_multiplier = 1.5
+                
+                call_gamma_enhanced = call_gamma_base * volume_weight * iv_adjustment * distance_weight * greeks_multiplier
+                put_gamma_enhanced = put_gamma_base * volume_weight * iv_adjustment * distance_weight * greeks_multiplier
+                
+                scaling = 1e9 if unit_label == "B" else 1e7
+                call_oi_gex_enhanced = (call_oi_change * call_gamma_enhanced * spot**2 * contract_size) / scaling
+                put_oi_gex_enhanced = -(put_oi_change * put_gamma_enhanced * spot**2 * contract_size) / scaling
+                
+                df_sorted.loc[idx, 'enhanced_oi_gex'] = call_oi_gex_enhanced + put_oi_gex_enhanced
+                
+            except Exception as e:
+                continue
+    except Exception as e:
+        st.warning(f"Error calculating enhanced OI GEX: {e}")
+    
+    gex_sum = abs(df_sorted['net_gex'].sum())
+    enhanced_oi_gex_sum = abs(df_sorted['enhanced_oi_gex'].sum())
+    has_gex_data = gex_sum > 0.000001
+    has_enhanced_oi_data = enhanced_oi_gex_sum > 0.000001
+    
+    max_gex = df_sorted['net_gex'].abs().max()
+    max_enhanced_oi_gex = df_sorted['enhanced_oi_gex'].abs().max()
+    
+    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
+    
+    fig = go.Figure()
+    
+    if not has_gex_data:
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            text="❌ No GEX Data Found<br>Check data source",
+            showarrow=False,
+            bgcolor="rgba(255,0,0,0.3)",
+            bordercolor="red",
+            borderwidth=2,
+            font=dict(color="white", size=16),
+            align="center"
+        )
+    else:
+        original_colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex']]
+        fig.add_trace(go.Bar(
+            y=df_sorted['strike'],
+            x=df_sorted['net_gex'],
+            orientation='h',
+            marker=dict(
+                color=original_colors,
+                opacity=0.6,
+                line=dict(width=0)
+            ),
+            name=f'Original GEX - Max: {max_gex:.4f}{unit_label}',
+            hovertemplate=f'Strike: %{{y:,.0f}}<br>Original GEX: %{{x:.4f}}{unit_label}<extra></extra>'
+        ))
+        
+        if has_enhanced_oi_data:
+            enhanced_colors = ['#8b5cf6' if x > 0 else '#f59e0b' for x in df_sorted['enhanced_oi_gex']]
+            fig.add_trace(go.Bar(
+                y=df_sorted['strike'],
+                x=df_sorted['enhanced_oi_gex'],
+                orientation='h',
+                marker=dict(
+                    color=enhanced_colors,
+                    opacity=0.85,
+                    line=dict(color='white', width=1)
+                ),
+                name=f'Enhanced OI GEX (Greeks+Vol) - Max: {max_enhanced_oi_gex:.4f}{unit_label}',
+                hovertemplate=f'Strike: %{{y:,.0f}}<br>Enhanced OI GEX: %{{x:.4f}}{unit_label}<extra></extra>'
+            ))
+    
+    fig.add_hline(y=spot_price, line_dash="dash", line_color="white", line_width=3,
+                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
+                  annotation=dict(font=dict(size=12, color="white", family="Arial Black")))
+    
+    fig.add_vline(x=0, line_dash="dot", line_color="gray", line_width=2)
+    
+    for zone in flip_zones:
+        fig.add_hline(
+            y=zone['strike'],
+            line_dash="dot",
+            line_color=zone['color'],
+            line_width=2,
+            annotation_text=f"🔄 {zone['strike']:,.0f}",
+            annotation_position="left",
+            annotation=dict(
+                font=dict(size=10, color=zone['color']),
+                bgcolor='rgba(0,0,0,0.7)',
+                bordercolor=zone['color'],
+                borderwidth=1
+            )
+        )
+        
+        fig.add_hrect(
+            y0=zone['lower_strike'],
+            y1=zone['upper_strike'],
+            fillcolor=zone['color'],
+            opacity=0.05,
+            line_width=0
+        )
+    
+    fig.update_layout(
+        title=dict(
+            text="<b>🚀 Enhanced GEX Overlay: Original vs Enhanced OI GEX</b><br><sub>Green/Red = All effects | Purple/Gold = OI changes with Greeks+Volume+IV+Distance adjustments | ✏️ Use toolbar to draw</sub>", 
+            font=dict(size=18, color='white')
+        ),
+        xaxis_title=f"GEX (₹ {unit_label})",
+        yaxis_title="Strike Price",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=700,
+        barmode='overlay',
+        bargap=0.15,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(color='white', size=11),
+            bgcolor='rgba(0,0,0,0.8)',
+            bordercolor='white',
+            borderwidth=1
+        ),
+        hovermode='closest',
+        xaxis=dict(
+            gridcolor='rgba(128,128,128,0.2)', 
+            showgrid=True,
+            zeroline=True,
+            zerolinecolor='rgba(255,255,255,0.3)',
+            zerolinewidth=2
+        ),
+        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
+        margin=dict(l=80, r=80, t=100, b=80),
+        dragmode='drawline',
+        newshape=dict(
+            line=dict(color='#f59e0b', width=2),
+            fillcolor='rgba(245, 158, 11, 0.2)'
+        )
+    )
+    
+    fig.update_layout(
+        modebar_add=[
+            'drawline',
+            'drawopenpath',
+            'drawclosedpath',
+            'drawcircle',
+            'drawrect',
+            'eraseshape'
+        ],
+        modebar=dict(
+            bgcolor='rgba(0,0,0,0.5)',
+            color='#94a3b8',
+            activecolor='#f59e0b'
+        )
+    )
+    
+    return fig
+
+# ============================================================================
+# STANDARD VISUALIZATION FUNCTIONS
+# ============================================================================
+
+def create_separate_gex_chart(df: pd.DataFrame, spot_price: float, unit_label: str = "B") -> go.Figure:
+    """GEX chart with Gamma Flip Zones"""
+    df_sorted = df.sort_values('strike').reset_index(drop=True)
+    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex']]
+    
+    flip_zones = identify_gamma_flip_zones(df_sorted, spot_price)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['strike'],
+        x=df_sorted['net_gex'],
+        orientation='h',
+        marker_color=colors,
+        name='Net GEX',
+        hovertemplate=f'Strike: %{{y:,.0f}}<br>Net GEX: %{{x:.4f}}{unit_label}<extra></extra>',
+        showlegend=False
+    ))
+    
+    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
+                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
+                  annotation=dict(font=dict(size=12, color="white")))
+    
+    for zone in flip_zones:
+        fig.add_hline(
+            y=zone['strike'],
+            line_dash="dot",
+            line_color=zone['color'],
+            line_width=2,
+            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
+            annotation_position="left",
+            annotation=dict(
+                font=dict(size=10, color=zone['color']),
+                bgcolor='rgba(0,0,0,0.7)',
+                bordercolor=zone['color'],
+                borderwidth=1
+            )
+        )
+        
+        fig.add_hrect(
+            y0=zone['lower_strike'],
+            y1=zone['upper_strike'],
+            fillcolor=zone['color'],
+            opacity=0.1,
+            line_width=0,
+            annotation_text=zone['arrow'],
+            annotation_position="right",
+            annotation=dict(font=dict(size=16, color=zone['color']))
+        )
+    
+    fig.update_layout(
+        title=dict(text="<b>🎯 Gamma Exposure (GEX) with Flip Zones</b><br><sub>✏️ Use toolbar to draw on chart</sub>", font=dict(size=18, color='white')),
+        xaxis_title=f"GEX (₹ {unit_label})",
+        yaxis_title="Strike Price",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=700,
+        showlegend=False,
+        hovermode='closest',
+        xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
+        yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, autorange=True),
+        margin=dict(l=80, r=80, t=80, b=80),
+        dragmode='drawline',
+        newshape=dict(
+            line=dict(color='#f59e0b', width=2),
+            fillcolor='rgba(245, 158, 11, 0.2)'
+        )
+    )
+    
+    fig.update_layout(
+        modebar_add=[
+            'drawline',
+            'drawopenpath',
+            'drawclosedpath',
+            'drawcircle',
+            'drawrect',
+            'eraseshape'
+        ],
+        modebar=dict(
+            bgcolor='rgba(0,0,0,0.5)',
+            color='#94a3b8',
+            activecolor='#f59e0b'
+        )
+    )
+    
+    return fig
+
+def create_standard_vanna_chart(df: pd.DataFrame, spot_price: float, unit_label: str = "B") -> go.Figure:
+    """Standard VANNA Exposure chart"""
+    df_sorted = df.sort_values('strike').reset_index(drop=True)
+    
+    colors_call = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['call_vanna']]
+    colors_put = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['put_vanna']]
+    
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("📈 Call VANNA", "📉 Put VANNA"),
+        horizontal_spacing=0.12
+    )
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['strike'],
+        x=df_sorted['call_vanna'],
+        orientation='h',
+        marker=dict(color=colors_call),
+        name='Call VANNA',
+        hovertemplate=f'Strike: %{{y:,.0f}}<br>Call VANNA: %{{x:.4f}}{unit_label}<extra></extra>'
+    ), row=1, col=1)
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['strike'],
+        x=df_sorted['put_vanna'],
+        orientation='h',
+        marker=dict(color=colors_put),
+        name='Put VANNA',
+        hovertemplate=f'Strike: %{{y:,.0f}}<br>Put VANNA: %{{x:.4f}}{unit_label}<extra></extra>'
+    ), row=1, col=2)
+    
+    for col in [1, 2]:
+        fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2,
+                      annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
+                      annotation=dict(font=dict(size=10, color="white")), row=1, col=col)
+    
+    fig.update_layout(
+        title=dict(text="<b>🌊 VANNA Exposure (dDelta/dVol)</b><br><sub>✏️ Use toolbar to draw on chart</sub>", font=dict(size=18, color='white')),
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=600,
+        showlegend=False,
+        hovermode='closest',
+        margin=dict(l=80, r=80, t=100, b=80),
+        dragmode='drawline',
+        newshape=dict(
+            line=dict(color='#f59e0b', width=2),
+            fillcolor='rgba(245, 158, 11, 0.2)'
+        )
+    )
+    
+    fig.update_layout(
+        modebar_add=[
+            'drawline',
+            'drawopenpath',
+            'drawclosedpath',
+            'drawcircle',
+            'drawrect',
+            'eraseshape'
+        ],
+        modebar=dict(
+            bgcolor='rgba(0,0,0,0.5)',
+            color='#94a3b8',
+            activecolor='#f59e0b'
+        )
+    )
+    
+    fig.update_xaxes(title_text=f"VANNA (₹ {unit_label})", gridcolor='rgba(128,128,128,0.2)', showgrid=True)
+    fig.update_yaxes(title_text="Strike Price", gridcolor='rgba(128,128,128,0.2)', showgrid=True)
+    
+    return fig
+
+def create_dex_chart(df: pd.DataFrame, spot_price: float, unit_label: str = "B") -> go.Figure:
+    """DEX chart"""
+    df_sorted = df.sort_values('strike').reset_index(drop=True)
+    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_dex']]
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['strike'],
+        x=df_sorted['net_dex'],
+        orientation='h',
+        marker_color=colors,
+        name='Net DEX',
+        hovertemplate=f'Strike: %{{y:,.0f}}<br>Net DEX: %{{x:.4f}}{unit_label}<extra></extra>',
+        showlegend=False
+    ))
+    
+    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
+                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right")
+    
+    fig.update_layout(
+        title=dict(text="<b>📊 Delta Exposure (DEX)</b>", font=dict(size=18, color='white')),
+        xaxis_title=f"DEX (₹ {unit_label})",
+        yaxis_title="Strike Price",
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=700,
+        showlegend=False,
+        hovermode='closest',
+        dragmode='drawline',
+        newshape=dict(line=dict(color='#f59e0b', width=2))
+    )
+    
+    fig.update_layout(
+        modebar_add=['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraseshape']
+    )
+    
+    return fig
+
+def create_oi_distribution_chart(df: pd.DataFrame, spot_price: float) -> go.Figure:
+    """OI Distribution chart"""
+    df_sorted = df.sort_values('strike').reset_index(drop=True)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['strike'],
+        x=df_sorted['call_oi'],
+        orientation='h',
+        name='Call OI',
+        marker_color='#10b981',
+        opacity=0.7
+    ))
+    
+    fig.add_trace(go.Bar(
+        y=df_sorted['strike'],
+        x=-df_sorted['put_oi'],
+        orientation='h',
+        name='Put OI',
+        marker_color='#ef4444',
+        opacity=0.7
+    ))
+    
+    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2)
+    
+    fig.update_layout(
+        title=dict(text="<b>📋 Open Interest Distribution</b>", font=dict(size=18, color='white')),
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(26,35,50,0.8)',
+        height=600,
+        barmode='overlay',
+        xaxis_title="Open Interest (Contracts)",
+        yaxis_title="Strike Price",
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    return fig
+
+def create_intraday_timeline(df: pd.DataFrame, unit_label: str = "B") -> go.Figure:
     """Create intraday timeline of total GEX and DEX"""
     timeline_df = df.groupby('timestamp').agg({
         'net_gex': 'sum',
@@ -1044,7 +1671,7 @@ def create_intraday_timeline(df: pd.DataFrame, metadata: Dict) -> go.Figure:
             y=timeline_df['net_gex'],
             marker_color=gex_colors,
             name='Net GEX',
-            hovertemplate='%{x|%H:%M}<br>GEX: %{y:.4f}Cr<extra></extra>'
+            hovertemplate=f'%{{x|%H:%M}}<br>GEX: %{{y:.4f}}{unit_label}<extra></extra>'
         ),
         row=1, col=1
     )
@@ -1056,7 +1683,7 @@ def create_intraday_timeline(df: pd.DataFrame, metadata: Dict) -> go.Figure:
             y=timeline_df['net_dex'],
             marker_color=dex_colors,
             name='Net DEX',
-            hovertemplate='%{x|%H:%M}<br>DEX: %{y:.4f}Cr<extra></extra>'
+            hovertemplate=f'%{{x|%H:%M}}<br>DEX: %{{y:.4f}}{unit_label}<extra></extra>'
         ),
         row=2, col=1
     )
@@ -1087,742 +1714,608 @@ def create_intraday_timeline(df: pd.DataFrame, metadata: Dict) -> go.Figure:
     )
     
     fig.update_xaxes(title_text="Time (IST)", row=3, col=1)
-    fig.update_yaxes(title_text="GEX (₹Cr)", row=1, col=1)
-    fig.update_yaxes(title_text="DEX (₹Cr)", row=2, col=1)
+    fig.update_yaxes(title_text=f"GEX (₹{unit_label})", row=1, col=1)
+    fig.update_yaxes(title_text=f"DEX (₹{unit_label})", row=2, col=1)
     fig.update_yaxes(title_text="Spot Price (₹)", row=3, col=1)
     
     return fig
 
-def create_separate_gex_chart(df: pd.DataFrame, metadata: Dict, flip_zones: List[Dict], spot_price: float) -> go.Figure:
-    """GEX chart with flip zones"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex']]
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex'],
-        orientation='h',
-        marker_color=colors,
-        name='Net GEX',
-        hovertemplate='Strike: %{y:,.0f}<br>Net GEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right",
-                  annotation=dict(font=dict(size=12, color="white")))
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2,
-            annotation_text=f"🔄 Flip {zone['arrow']} {zone['strike']:,.0f}",
-            annotation_position="left",
-            annotation=dict(
-                font=dict(size=10, color=zone['color']),
-                bgcolor='rgba(0,0,0,0.7)',
-                bordercolor=zone['color'],
-                borderwidth=1
-            )
-        )
-        
-        fig.add_hrect(
-            y0=zone['lower_strike'],
-            y1=zone['upper_strike'],
-            fillcolor=zone['color'],
-            opacity=0.1,
-            line_width=0
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>🎯 Gamma Exposure (GEX) with Flip Zones</b>",
-                  font=dict(size=18, color='white')),
-        xaxis_title="GEX (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False,
-        hovermode='closest'
-    )
-    
-    return fig
-
-def create_separate_dex_chart(df: pd.DataFrame, metadata: Dict) -> go.Figure:
-    """DEX chart"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_dex']]
-    spot_price = metadata.get('spot_price', df_sorted['spot_price'].iloc[0])
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_dex'],
-        orientation='h',
-        marker_color=colors,
-        name='Net DEX',
-        hovertemplate='Strike: %{y:,.0f}<br>Net DEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right")
-    
-    fig.update_layout(
-        title=dict(text="<b>📊 Delta Exposure (DEX)</b>", font=dict(size=18, color='white')),
-        xaxis_title="DEX (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False
-    )
-    
-    return fig
-
-def create_net_gex_dex_chart(df: pd.DataFrame, metadata: Dict, flip_zones: List[Dict], spot_price: float) -> go.Figure:
-    """Combined NET GEX+DEX"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    df_sorted['net_gex_dex'] = df_sorted['net_gex'] + df_sorted['net_dex']
-    colors = ['#10b981' if x > 0 else '#ef4444' for x in df_sorted['net_gex_dex']]
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['net_gex_dex'],
-        orientation='h',
-        marker_color=colors,
-        name='Net GEX+DEX',
-        hovertemplate='Strike: %{y:,.0f}<br>Net GEX+DEX: %{x:.4f}Cr<extra></extra>',
-        showlegend=False
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=3,
-                  annotation_text=f"Spot: {spot_price:,.2f}", annotation_position="top right")
-    
-    for zone in flip_zones:
-        fig.add_hline(
-            y=zone['strike'],
-            line_dash="dot",
-            line_color=zone['color'],
-            line_width=2
-        )
-    
-    fig.update_layout(
-        title=dict(text="<b>⚡ Combined NET GEX + DEX</b>", font=dict(size=18, color='white')),
-        xaxis_title="Combined Exposure (₹ Crores)",
-        yaxis_title="Strike Price",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=700,
-        showlegend=False
-    )
-    
-    return fig
-
-def create_oi_distribution(df: pd.DataFrame, metadata: Dict, spot_price: float) -> go.Figure:
-    """OI distribution"""
-    df_sorted = df.sort_values('strike').reset_index(drop=True)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=df_sorted['call_oi'],
-        orientation='h',
-        name='Call OI',
-        marker_color='#10b981',
-        opacity=0.7
-    ))
-    
-    fig.add_trace(go.Bar(
-        y=df_sorted['strike'],
-        x=-df_sorted['put_oi'],
-        orientation='h',
-        name='Put OI',
-        marker_color='#ef4444',
-        opacity=0.7
-    ))
-    
-    fig.add_hline(y=spot_price, line_dash="dash", line_color="#06b6d4", line_width=2)
-    
-    fig.update_layout(
-        title=dict(text="<b>📋 Open Interest Distribution</b>", font=dict(size=16, color='white')),
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=500,
-        barmode='overlay'
-    )
-    
-    return fig
-
-# Screener visualization functions
-def display_screener_results(df_results: pd.DataFrame):
-    """Display screener results as cards"""
-    for idx, row in df_results.iterrows():
-        gex_color = '#10b981' if row['net_gex'] > 0 else '#ef4444'
-        signal = '🟢 BULLISH' if row['net_gex'] > 0 else '🔴 BEARISH'
-        
-        card_html = f"""
-        <div style="background: #1a2332; border: 2px solid #2d3748; border-left: 4px solid {gex_color}; 
-                    border-radius: 12px; padding: 20px; margin: 10px 0;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <h3 style="margin: 0; color: #f8fafc; font-size: 1.5rem;">{row['symbol']}</h3>
-                    <p style="margin: 5px 0; color: #cbd5e1;">Spot: ₹{row['spot']:,.2f}</p>
-                </div>
-                <div style="background: rgba({16 if row['net_gex'] > 0 else 239}, {185 if row['net_gex'] > 0 else 68}, {129 if row['net_gex'] > 0 else 68}, 0.2);
-                           color: {gex_color}; padding: 8px 16px; border-radius: 20px; font-weight: 600;">
-                    {signal}
-                </div>
-            </div>
-            <div style="margin-top: 15px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">NET GEX</p>
-                    <p style="margin: 5px 0; color: {gex_color}; font-weight: 600;">{row['net_gex']:.4f}Cr</p>
-                </div>
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">NET DEX</p>
-                    <p style="margin: 5px 0; color: #f8fafc; font-weight: 600;">{row['net_dex']:.4f}Cr</p>
-                </div>
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">FLIP ZONES</p>
-                    <p style="margin: 5px 0; color: #fbbf24; font-weight: 600;">{row['flip_zones']}</p>
-                </div>
-                <div>
-                    <p style="margin: 0; color: #9ca3af; font-size: 0.8rem;">POSITION</p>
-                    <p style="margin: 5px 0; color: #06b6d4; font-weight: 600; font-size: 0.8rem;">{row['flip_position']}</p>
-                </div>
-            </div>
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
-
-def create_screener_summary_chart(df_results: pd.DataFrame) -> go.Figure:
-    """Summary chart for screener"""
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df_results['symbol'],
-        x=df_results['net_gex'],
-        orientation='h',
-        name='NET GEX',
-        marker_color=['#10b981' if x > 0 else '#ef4444' for x in df_results['net_gex']]
-    ))
-    
-    fig.update_layout(
-        title="<b>NET GEX Comparison</b>",
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(26,35,50,0.8)',
-        height=max(400, len(df_results) * 50)
-    )
-    
-    return fig
-
 # ============================================================================
-# MAIN APPLICATION
+# MAIN APP
 # ============================================================================
 
 def main():
-    # Initialize cache manager in session state
-    if 'cache_manager' not in st.session_state:
-        st.session_state.cache_manager = DataCacheManager()
+    # Header with status indicator
+    current_time = datetime.now(IST).strftime('%H:%M:%S IST')
+    is_market_open = cache_manager.is_market_hours()
     
-    cache_manager = st.session_state.cache_manager
+    market_status = "🟢 MARKET OPEN" if is_market_open else "🔴 MARKET CLOSED"
+    market_color = "#10b981" if is_market_open else "#ef4444"
     
-    # Header
-    st.markdown("""
+    st.markdown(f"""
     <div class="main-header">
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-                <h1 class="main-title">🎯 NYZTrade Stock Options | Complete Dashboard</h1>
-                <p class="sub-title">Full Analysis + Screener | ALL CHARTS | Cache | VANNA/CHARM | Complete!</p>
+                <h1 class="main-title">📊 NYZTrade UNIFIED Dashboard</h1>
+                <p class="sub-title">INDEX + STOCK Options | GEX/DEX/VANNA/CHARM | Smart Caching</p>
             </div>
-            <div class="history-indicator">
-                <div class="history-dot"></div>
-                <span style="color: #3b82f6; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;">CACHE ENABLED</span>
+            <div style="display: flex; gap: 12px; align-items: center;">
+                <div class="live-indicator">
+                    <div class="live-dot"></div>
+                    <span style="color: #ef4444; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;">{current_time}</span>
+                </div>
+                <div style="padding: 6px 14px; background: rgba({market_color.replace('#', '')[:2]}, {market_color.replace('#', '')[2:4]}, {market_color.replace('#', '')[4:]}, 0.1); border: 1px solid {market_color}30; border-radius: 20px;">
+                    <span style="color: {market_color}; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">{market_status}</span>
+                </div>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar
+    # Sidebar configuration
     with st.sidebar:
-        st.markdown("### 🎯 Mode Selection")
+        st.markdown("### ⚙️ Configuration")
         
-        app_mode = st.radio(
-            "Choose Mode",
-            ["📊 Single Stock Analysis", "🔍 Multi-Stock Screener"],
-            index=0
+        # Instrument Type Selection
+        instrument_type = st.radio(
+            "📈 Instrument Type",
+            ["Index Options", "Stock Options"],
+            index=0,
+            horizontal=True
         )
         
         st.markdown("---")
         
-        if app_mode == "📊 Single Stock Analysis":
-            st.markdown("#### 💾 CACHE STATUS")
+        if instrument_type == "Index Options":
+            # INDEX Selection
+            symbol = st.selectbox(
+                "🎯 Select Index", 
+                options=list(DHAN_INDEX_SECURITY_IDS.keys()), 
+                index=0
+            )
             
-            stats = cache_manager.get_cache_stats()
-            
+            config = INDEX_CONFIG.get(symbol, INDEX_CONFIG["NIFTY"])
             st.markdown(f"""
-            <div style='background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.1)); 
-                        border: 1px solid rgba(59,130,246,0.3); border-radius: 12px; padding: 16px; margin: 12px 0;'>
-                <div style='font-size: 0.9rem; font-weight: 600; color: #3b82f6; margin-bottom: 8px;'>📊 Cache Statistics</div>
-                <div style='font-size: 0.75rem; color: #94a3b8; margin: 4px 0;'>📁 Datasets: {stats.get('total_datasets', 0)}</div>
-                <div style='font-size: 0.75rem; color: #94a3b8; margin: 4px 0;'>💿 Size: {stats['total_size_mb']:.1f} MB</div>
-                <div style='font-size: 0.75rem; color: #94a3b8; margin: 4px 0;'>📅 Days: {stats.get('date_count', 0)}</div>
+            <div class="index-badge">
+                📊 INDEX | Lot: {config['contract_size']} | Strike: ₹{config['strike_interval']}
             </div>
             """, unsafe_allow_html=True)
             
-            if st.button("🗑️ Clear Cache", use_container_width=True):
-                cache_manager.clear_cache()
-                st.success("Cache cleared!")
-                st.rerun()
+            # Default expiry for indices
+            default_expiry_type = "Weekly"
             
-            st.markdown("---")
-            st.markdown("#### Stock Selection")
+        else:
+            # STOCK Selection
+            st.markdown("#### 📂 Stock Category")
+            category = st.selectbox(
+                "Category",
+                options=list(STOCK_CATEGORIES.keys()),
+                index=0
+            )
             
-            category = st.selectbox("Category", [
-                "Banking & Finance", "IT & Technology", "Energy & Power",
-                "Auto & Industrial", "FMCG & Consumer", "Others"
-            ])
+            symbol = st.selectbox(
+                "🎯 Select Stock",
+                options=STOCK_CATEGORIES[category],
+                index=0
+            )
             
-            category_stocks = {
-                "Banking & Finance": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "BAJFINANCE", "BAJAJFINSV"],
-                "IT & Technology": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
-                "Energy & Power": ["RELIANCE", "ONGC", "POWERGRID", "NTPC", "COALINDIA"],
-                "Auto & Industrial": ["MARUTI", "TATAMOTORS", "M&M", "LT"],
-                "FMCG & Consumer": ["HINDUNILVR", "ITC", "ASIANPAINT", "TITAN"],
-                "Others": ["SUNPHARMA", "TATASTEEL", "BHARTIARTL", "ADANIPORTS"]
-            }
+            config = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
+            st.markdown(f"""
+            <div class="stock-badge">
+                📈 STOCK | Lot: {config['lot_size']} | Strike: ₹{config['strike_interval']}
+            </div>
+            """, unsafe_allow_html=True)
             
-            symbol = st.selectbox("Stock", category_stocks[category])
-            
-            stock_info = STOCK_CONFIG.get(symbol, {"lot_size": 500, "strike_interval": 10})
-            st.info(f"📦 Lot: {stock_info['lot_size']}\n⚡ Interval: ₹{stock_info['strike_interval']}")
-            
-            st.markdown("---")
-            st.markdown("#### Date Selection")
-            
-            date_range_option = st.selectbox("Range", ["Last 30 Days", "Last 60 Days", "Last 90 Days", "Custom"], index=0)
-            
-            if date_range_option == "Custom":
-                col1, col2 = st.columns(2)
-                with col1:
-                    start_date = st.date_input("Start", value=datetime.now() - timedelta(days=30),
-                                               max_value=datetime.now(), min_value=datetime.now() - timedelta(days=90))
-                with col2:
-                    end_date = st.date_input("End", value=datetime.now(),
-                                             max_value=datetime.now(), min_value=start_date)
-                date_list = pd.date_range(start=start_date, end=end_date, freq='D')
-                date_list = [d for d in date_list if d.weekday() < 5]
-            else:
-                days_back = {"Last 30 Days": 30, "Last 60 Days": 60, "Last 90 Days": 90}[date_range_option]
-                date_list = pd.date_range(end=datetime.now(), periods=days_back, freq='D')
-                date_list = [d for d in date_list if d.weekday() < 5]
-            
-            available_dates = [d.date() for d in date_list]
-            
-            if len(available_dates) > 0:
-                st.caption(f"📊 {len(available_dates)} trading days")
-            
-            selected_date = st.selectbox("Trading Day", options=available_dates,
-                                        index=len(available_dates)-1 if len(available_dates) > 0 else 0,
-                                        format_func=lambda x: x.strftime('%Y-%m-%d (%A)'))
-            
-            target_date = selected_date.strftime('%Y-%m-%d')
-            
-            st.markdown("---")
-            st.markdown("#### Analysis Settings")
-            
-            expiry_type = st.selectbox("Expiry", ["Monthly", "Weekly"], index=0)
-            expiry_flag = "MONTH" if expiry_type == "Monthly" else "WEEK"
-            expiry_code = st.selectbox("Expiry Code", [1, 2, 3], index=0,
-                                      format_func=lambda x: {1: "Current", 2: "Next", 3: "Far"}[x])
-            
-            strikes = st.multiselect("Strikes",
-                ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3",
-                 "ATM+4", "ATM-4", "ATM+5", "ATM-5"],
-                default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3"])
-            
-            interval = st.selectbox("Interval", options=["1", "5", "15", "60"],
-                                   format_func=lambda x: {"1": "1 min", "5": "5 min", "15": "15 min", "60": "1 hour"}[x],
-                                   index=2)
-            
-            st.info(f"📊 {len(strikes)} strikes | {interval} min")
-            
-            st.markdown("---")
-            
-            fetch_button = st.button("🚀 Fetch Data", use_container_width=True, type="primary")
-        
-        else:  # Screener mode
-            st.markdown("#### Stock Selection")
-            
-            preset = st.selectbox("Quick Preset",
-                ["Custom", "Banking Stocks", "IT Stocks", "High Volume Stocks", "All Stocks (30)"],
-                index=0)
-            
-            if preset == "Custom":
-                selected_stocks = st.multiselect("Select Stocks",
-                    options=sorted(list(DHAN_STOCK_SECURITY_IDS.keys())),
-                    default=["RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK"])
-            elif preset == "Banking Stocks":
-                selected_stocks = ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK"]
-            elif preset == "IT Stocks":
-                selected_stocks = ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"]
-            elif preset == "High Volume Stocks":
-                selected_stocks = ["RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK",
-                                  "SBIN", "BHARTIARTL", "ITC", "LT", "AXISBANK"]
-            else:
-                selected_stocks = sorted(list(DHAN_STOCK_SECURITY_IDS.keys()))
-            
-            st.info(f"📊 {len(selected_stocks)} stocks selected")
-            
-            st.markdown("---")
-            st.markdown("#### Screener Filter")
-            
-            filter_type = st.radio("Filter Type",
-                ["🟢 Spot Above Gamma Flip", 
-                 "🔴 Spot Below Gamma Flip", 
-                 "🔵 All Stocks with Flip Zones",
-                 "✅ NET GEX Positive",
-                 "❌ NET GEX Negative"],
-                index=0)
-            
-            st.markdown("---")
-            st.markdown("#### Settings")
-            
-            expiry_type = st.selectbox("Expiry", ["Monthly", "Weekly"], index=0)
-            expiry_flag = "MONTH" if expiry_type == "Monthly" else "WEEK"
-            expiry_code = st.selectbox("Expiry Code", [1, 2, 3], index=0,
-                                      format_func=lambda x: {1: "Current", 2: "Next", 3: "Far"}[x])
-            
-            strikes_count = st.slider("Strikes per Stock", 3, 7, 5)
-            strike_list = ["ATM"] + [f"ATM+{i}" for i in range(1, strikes_count)] + [f"ATM-{i}" for i in range(1, strikes_count)]
-            
-            st.markdown("---")
-            
-            run_screener = st.button("🚀 Run Screener", use_container_width=True, type="primary")
+            # Default expiry for stocks
+            default_expiry_type = "Monthly"
         
         st.markdown("---")
-        st.markdown("### 🕐 IST")
-        ist_now = datetime.now(IST)
-        st.info(f"{ist_now.strftime('%H:%M:%S')}")
+        
+        # Date Selection
+        target_date = st.date_input(
+            "📅 Select Date", 
+            value=datetime.now(),
+            max_value=datetime.now()
+        ).strftime('%Y-%m-%d')
+        
+        # Show if current day or historical
+        is_current_day = cache_manager.is_current_trading_day(target_date)
+        if is_current_day:
+            st.info("📡 **LIVE MODE**: Data will update incrementally")
+        else:
+            st.success("📦 **HISTORICAL**: Data will be cached after first fetch")
+        
+        st.markdown("---")
+        
+        # Expiry Selection
+        expiry_type = st.selectbox(
+            "📆 Expiry Type", 
+            ["Weekly", "Monthly"], 
+            index=0 if default_expiry_type == "Weekly" else 1
+        )
+        expiry_flag = "WEEK" if expiry_type == "Weekly" else "MONTH"
+        expiry_code = st.selectbox(
+            "Expiry Code", 
+            [1, 2, 3], 
+            index=0,
+            format_func=lambda x: {1: "Current Expiry", 2: "Next Expiry", 3: "Far Expiry"}[x]
+        )
+        
+        st.markdown("---")
+        
+        # Strike Selection
+        strikes = st.multiselect(
+            "⚡ Select Strikes",
+            ["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3", "ATM+4", "ATM-4", "ATM+5", "ATM-5", 
+             "ATM+6", "ATM-6", "ATM+7", "ATM-7", "ATM+8", "ATM-8", "ATM+9", "ATM-9", "ATM+10", "ATM-10"],
+            default=["ATM", "ATM+1", "ATM-1", "ATM+2", "ATM-2", "ATM+3", "ATM-3"]
+        )
+        
+        interval = st.selectbox(
+            "⏱️ Interval", 
+            options=["1", "5", "15", "60"], 
+            index=1, 
+            format_func=lambda x: f"{x} minute" if x == "1" else f"{x} minutes"
+        )
+        
+        st.markdown("---")
+        st.markdown("### 🔄 Live Controls")
+        
+        # Auto-refresh toggle
+        auto_refresh_enabled = is_current_day and is_market_open
+        
+        if auto_refresh_enabled:
+            auto_refresh = st.checkbox("🔄 Enable Auto-Refresh", value=False, key="auto_refresh_checkbox")
+            if auto_refresh:
+                refresh_interval = st.slider("Refresh Interval (seconds)", min_value=10, max_value=300, value=60, step=10)
+                st.info(f"⏱️ Incremental update every {refresh_interval}s")
+            else:
+                refresh_interval = 60
+        else:
+            auto_refresh = False
+            refresh_interval = 60
+            if not is_current_day:
+                st.info("ℹ️ Auto-refresh disabled for historical data")
+            elif not is_market_open:
+                st.info("ℹ️ Auto-refresh disabled (market closed)")
+        
+        # Buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            fetch_button = st.button("🚀 Fetch Data", use_container_width=True, type="primary")
+        with col2:
+            if is_current_day:
+                refresh_button = st.button("🔄 Update", use_container_width=True)
+            else:
+                refresh_button = st.button("🔄 Refresh", use_container_width=True)
+        
+        force_refresh = st.checkbox(
+            "🔥 Force Full Refresh", 
+            value=False, 
+            help="Ignore cache and fetch all data fresh"
+        )
+        
+        st.markdown("---")
+        st.markdown("### 📊 Cache Status")
+        
+        cache_stats = cache_manager.get_cache_stats()
+        st.markdown(f"""
+        - **Cached entries**: {cache_stats['num_entries']}
+        - **Total size**: {cache_stats['total_size_mb']:.2f} MB
+        """)
+        
+        if st.button("🗑️ Clear All Cache", use_container_width=True):
+            cache_manager.clear_cache()
+            st.success("Cache cleared!")
+            st.rerun()
+        
+        st.markdown("---")
+        st.markdown("### ✏️ Drawing Tools")
+        st.markdown("""
+        <div style="font-size: 0.8rem; color: #94a3b8;">
+        Hover on any chart to see toolbar:
+        <ul style="margin: 4px 0; padding-left: 16px;">
+        <li>📏 <b>Line</b> - Draw straight lines</li>
+        <li>✍️ <b>Open Path</b> - Freehand drawing</li>
+        <li>🔷 <b>Closed Path</b> - Draw polygons</li>
+        <li>⭕ <b>Circle</b> - Draw circles/ellipses</li>
+        <li>⬜ <b>Rectangle</b> - Draw rectangles</li>
+        <li>🧹 <b>Eraser</b> - Remove drawings</li>
+        </ul>
+        <i>Drawings are session-only</i>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Initialize session state
+    if 'last_refresh_time' not in st.session_state:
+        st.session_state.last_refresh_time = None
+    
+    # Handle fetch/refresh
+    if fetch_button or refresh_button:
+        st.session_state.fetch_config = {
+            'symbol': symbol,
+            'target_date': target_date,
+            'strikes': strikes,
+            'interval': interval,
+            'expiry_code': expiry_code,
+            'expiry_flag': expiry_flag,
+            'force_refresh': force_refresh,
+            'instrument_type': instrument_type
+        }
+        st.session_state.data_fetched = False
+        st.session_state.last_refresh_time = datetime.now()
+    
+    # Auto-refresh logic
+    if auto_refresh and auto_refresh_enabled:
+        if st.session_state.last_refresh_time is None:
+            st.session_state.last_refresh_time = datetime.now()
+        
+        elapsed = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
+        remaining = max(0, int(refresh_interval - elapsed))
+        
+        if remaining > 0:
+            st.sidebar.success(f"⏳ Next update in: **{remaining}s**")
+        else:
+            st.sidebar.warning("🔄 Updating...")
+        
+        if elapsed >= refresh_interval and hasattr(st.session_state, 'fetch_config'):
+            st.session_state.fetch_config['force_refresh'] = False
+            st.session_state.data_fetched = False
+            st.session_state.last_refresh_time = datetime.now()
+        
+        time.sleep(1)
+        st.rerun()
     
     # Main content
-    if app_mode == "📊 Single Stock Analysis":
-        # Store config
-        if fetch_button:
-            st.session_state.fetch_config = {
-                'symbol': symbol,
-                'target_date': target_date,
-                'strikes': strikes,
-                'interval': interval,
-                'expiry_code': expiry_code,
-                'expiry_flag': expiry_flag
-            }
-            st.session_state.data_fetched = False
+    if fetch_button or refresh_button or (hasattr(st.session_state, 'fetch_config') and st.session_state.get('data_fetched', False)):
+        if hasattr(st.session_state, 'fetch_config'):
+            config = st.session_state.fetch_config
+            symbol = config['symbol']
+            target_date = config['target_date']
+            strikes = config['strikes']
+            interval = config['interval']
+            expiry_code = config.get('expiry_code', 1)
+            expiry_flag = config.get('expiry_flag', 'WEEK')
+            force_refresh = config.get('force_refresh', False)
         
-        # Fetch data if button clicked
-        if 'fetch_config' in st.session_state and not st.session_state.get('data_fetched', False):
-            config_obj = st.session_state.fetch_config
-            
-            with st.spinner("🔍 Fetching data with cache..."):
-                # FIX: Create DhanConfig and instantiate fetcher properly
-                dhan_config = DhanConfig()
-                fetcher = DhanStockOptionsFetcher(dhan_config, cache_manager)
-                
-                try:
-                    df, metadata, from_cache = fetcher.fetch_with_cache(
-                        symbol=config_obj['symbol'],
-                        target_date=config_obj['target_date'],
-                        strikes=config_obj['strikes'],
-                        interval=config_obj['interval'],
-                        expiry_code=config_obj['expiry_code'],
-                        expiry_flag=config_obj['expiry_flag']
-                    )
-                    
-                    if df is not None and len(df) > 0:
-                        st.session_state.df_data = df
-                        st.session_state.meta_data = metadata
-                        st.session_state.data_fetched = True
-                        st.session_state.timestamp_idx = 0
-                        
-                        cache_status = "✅ LOADED FROM CACHE" if from_cache else "🆕 FETCHED FRESH"
-                        st.success(f"{cache_status} | {len(df)} records | {len(df['timestamp'].unique())} timestamps")
-                    else:
-                        st.error("No data received")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+        if not strikes:
+            st.error("❌ Please select at least one strike")
+            return
         
-        # Display data if available
-        if st.session_state.get('data_fetched', False) and 'df_data' in st.session_state:
-            df = st.session_state.df_data
-            metadata = st.session_state.meta_data
-            
-            # Time navigation
-            unique_timestamps = sorted(df['timestamp'].unique())
-            
-            if len(unique_timestamps) > 0:
-                st.markdown("---")
-                st.markdown("### ⏰ Time Navigation")
-                
-                col1, col2, col3 = st.columns([2, 6, 2])
-                
-                with col1:
-                    if st.button("⏮️ First", use_container_width=True):
-                        st.session_state.timestamp_idx = 0
-                    if st.button("◀️ Prev", use_container_width=True):
-                        st.session_state.timestamp_idx = max(0, st.session_state.timestamp_idx - 1)
-                
-                with col2:
-                    st.session_state.timestamp_idx = st.slider(
-                        "Time",
-                        0,
-                        len(unique_timestamps) - 1,
-                        st.session_state.get('timestamp_idx', 0),
-                        format=f"{unique_timestamps[st.session_state.get('timestamp_idx', 0)].strftime('%H:%M:%S')}"
-                    )
-                
-                with col3:
-                    if st.button("Next ▶️", use_container_width=True):
-                        st.session_state.timestamp_idx = min(len(unique_timestamps) - 1, st.session_state.timestamp_idx + 1)
-                    if st.button("Last ⏭️", use_container_width=True):
-                        st.session_state.timestamp_idx = len(unique_timestamps) - 1
-                
-                current_timestamp = unique_timestamps[st.session_state.timestamp_idx]
-                df_current = df[df['timestamp'] == current_timestamp].copy()
-                
-                st.info(f"🕐 {current_timestamp.strftime('%Y-%m-%d %H:%M:%S')} IST | Record {st.session_state.timestamp_idx + 1}/{len(unique_timestamps)}")
-                
-                # Get spot price
-                spot_price = metadata.get('spot_price', df_current['spot_price'].iloc[0] if len(df_current) > 0 else 0)
-                
-                # Calculate flip zones
-                flip_zones = identify_gamma_flip_zones(df_current, spot_price)
-                flip_position = analyze_flip_zone_position(spot_price, flip_zones)
-                
-                # Display key metrics
-                st.markdown("---")
-                col1, col2, col3, col4, col5 = st.columns(5)
-                
-                with col1:
-                    net_gex = df_current['net_gex'].sum()
-                    st.metric("NET GEX", f"₹{abs(net_gex):.2f}Cr", 
-                             delta="Bullish" if net_gex > 0 else "Bearish")
-                
-                with col2:
-                    net_dex = df_current['net_dex'].sum()
-                    st.metric("NET DEX", f"₹{abs(net_dex):.2f}Cr",
-                             delta="Long" if net_dex > 0 else "Short")
-                
-                with col3:
-                    st.metric("SPOT", f"₹{spot_price:,.2f}", 
-                             delta=metadata.get('symbol', 'STOCK'))
-                
-                with col4:
-                    hedging_pressure = df_current['hedging_pressure'].mean()
-                    st.metric("PRESSURE", f"{hedging_pressure:+.1f}%",
-                             delta="High" if abs(hedging_pressure) > 40 else "Normal")
-                
-                with col5:
-                    st.metric("FLIP ZONES", len(flip_zones),
-                             delta=flip_position)
-                
-                # Tabs for analysis
-                st.markdown("---")
-                
-                tabs = st.tabs([
-                    "📊 Overview",
-                    "📈 GEX Analysis", 
-                    "📉 DEX Analysis",
-                    "🎯 OI Analysis",
-                    "📋 Data Table"
-                ])
-                
-                with tabs[0]:  # Overview
-                    st.markdown("### 📊 Intraday Timeline")
-                    df_timeline = df[df['timestamp'] <= current_timestamp].copy()
-                    if len(df_timeline) > 0:
-                        fig = create_intraday_timeline(df_timeline, metadata)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.markdown("### 💾 Gamma Flip Zones")
-                    if len(flip_zones) > 0:
-                        for i, zone in enumerate(flip_zones[:5], 1):
-                            col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
-                            with col1:
-                                st.metric("Zone", f"#{i}")
-                            with col2:
-                                st.metric("Strike", f"₹{zone['strike']:.2f}")
-                            with col3:
-                                st.metric("Distance", f"{zone['distance_pct']:.2f}%")
-                            with col4:
-                                signal = "🟢 Above" if spot_price > zone['strike'] else "🔴 Below"
-                                st.metric("Position", signal)
-                    else:
-                        st.info("No gamma flip zones detected")
-                
-                with tabs[1]:  # GEX Analysis
-                    st.markdown("### 📊 GEX with Flip Zones")
-                    fig = create_separate_gex_chart(df_current, metadata, flip_zones, spot_price)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.markdown("### 📊 GEX + DEX Combined")
-                    fig = create_net_gex_dex_chart(df_current, metadata, flip_zones, spot_price)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[2]:  # DEX Analysis
-                    st.markdown("### 📊 Delta Exposure")
-                    fig = create_separate_dex_chart(df_current, metadata)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[3]:  # OI Analysis
-                    st.markdown("### 📊 Open Interest Distribution")
-                    fig = create_oi_distribution(df_current, metadata, spot_price)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with tabs[4]:  # Data Table
-                    st.markdown("### 📋 Complete Data Table")
-                    display_cols = ['strike', 'call_oi', 'call_volume', 'call_gex', 'call_dex', 
-                                   'put_oi', 'put_volume', 'put_gex', 'put_dex', 
-                                   'net_gex', 'net_dex', 'hedging_pressure']
-                    
-                    display_df = df_current[display_cols].copy()
-                    display_df = display_df.sort_values('strike')
-                    st.dataframe(display_df, use_container_width=True, height=600)
+        # Check if we need to fetch data
+        need_to_fetch = (
+            not st.session_state.get('data_fetched', False) or 
+            'df_data' not in st.session_state or 
+            fetch_button or 
+            refresh_button
+        )
         
+        if need_to_fetch:
+            try:
+                df, meta, fetch_mode = fetch_data_with_smart_cache(
+                    symbol, target_date, strikes, interval, expiry_code, expiry_flag, force_refresh
+                )
+                
+                if df is None or len(df) == 0:
+                    st.error("❌ No data available for the selected date/time.")
+                    return
+                
+                st.session_state.df_data = df
+                st.session_state.meta_data = meta
+                st.session_state.fetch_mode = fetch_mode
+                st.session_state.data_fetched = True
+                
+                if not auto_refresh:
+                    st.rerun()
+            
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                return
+        
+        # Retrieve from session state
+        df = st.session_state.df_data
+        meta = st.session_state.meta_data
+        fetch_mode = st.session_state.get('fetch_mode', 'unknown')
+        
+        # Get unit label
+        unit_label = meta.get('unit_label', 'B')
+        instrument_type_label = meta.get('instrument_type', 'INDEX')
+        
+        all_timestamps = sorted(df['timestamp'].unique())
+        
+        # Time selector
+        if 'timestamp_idx' not in st.session_state:
+            st.session_state.timestamp_idx = len(all_timestamps) - 1
+        
+        selected_timestamp_idx = st.slider(
+            "⏱️ Select Time Point",
+            min_value=0,
+            max_value=len(all_timestamps) - 1,
+            value=min(st.session_state.timestamp_idx, len(all_timestamps) - 1)
+        )
+        
+        selected_timestamp = all_timestamps[selected_timestamp_idx]
+        
+        # Filter data for selected timestamp
+        df_selected = df[df['timestamp'] == selected_timestamp].copy()
+        spot_price = df_selected['spot_price'].iloc[0] if len(df_selected) > 0 else 0
+        
+        # Status message with fetch mode
+        fetch_time = meta.get('fetch_time', 'Unknown')
+        
+        # Create status badge based on fetch mode
+        if fetch_mode == 'cached':
+            mode_badge = "📦 CACHED"
+            mode_color = "#10b981"
+        elif fetch_mode == 'incremental':
+            new_records = meta.get('new_records', 0)
+            mode_badge = f"📡 INCREMENTAL (+{new_records} new)"
+            mode_color = "#06b6d4"
         else:
-            st.info("👈 Configure settings in sidebar and click 'Fetch Data' to begin analysis")
-    
-    else:  # SCREENER MODE
-        if run_screener:
-            st.markdown("### 🔍 Multi-Stock Screener Results")
-            
-            results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # FIX: Create DhanConfig before the loop
-            dhan_config = DhanConfig()
-            
-            for idx, stock_symbol in enumerate(selected_stocks):
-                status_text.text(f"Screening {stock_symbol}... ({idx+1}/{len(selected_stocks)})")
-                progress_bar.progress((idx + 1) / len(selected_stocks))
-                
-                try:
-                    # FIX: Instantiate fetcher with config and cache_manager
-                    fetcher = DhanStockOptionsFetcher(dhan_config, cache_manager)
-                    today = datetime.now().strftime('%Y-%m-%d')
-                    
-                    df, metadata, from_cache = fetcher.fetch_with_cache(
-                        symbol=stock_symbol,
-                        target_date=today,
-                        strikes=strike_list,
-                        interval="15",
-                        expiry_code=expiry_code,
-                        expiry_flag=expiry_flag
-                    )
-                    
-                    if df is not None and len(df) > 0:
-                        # Get latest data
-                        latest_time = df['timestamp'].max()
-                        df_latest = df[df['timestamp'] == latest_time].copy()
-                        
-                        spot_price = metadata.get('spot_price', df_latest['spot_price'].iloc[0])
-                        
-                        # Calculate metrics
-                        net_gex = df_latest['net_gex'].sum()
-                        net_dex = df_latest['net_dex'].sum()
-                        
-                        flip_zones = identify_gamma_flip_zones(df_latest, spot_price)
-                        flip_position = analyze_flip_zone_position(spot_price, flip_zones)
-                        
-                        result = {
-                            'symbol': stock_symbol,
-                            'spot': spot_price,
-                            'net_gex': net_gex,
-                            'net_dex': net_dex,
-                            'flip_zones': len(flip_zones),
-                            'flip_position': flip_position,
-                            'timestamp': latest_time
-                        }
-                        
-                        results.append(result)
-                
-                except Exception as e:
-                    st.warning(f"Error processing {stock_symbol}: {str(e)}")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            if len(results) > 0:
-                results_df = pd.DataFrame(results)
-                
-                # Apply filters
-                filtered_df = results_df.copy()
-                
-                if filter_type == "🟢 Spot Above Gamma Flip":
-                    filtered_df = filtered_df[filtered_df['flip_position'] == "Above all flip zones"]
-                elif filter_type == "🔴 Spot Below Gamma Flip":
-                    filtered_df = filtered_df[filtered_df['flip_position'] == "Below all flip zones"]
-                elif filter_type == "🔵 All Stocks with Flip Zones":
-                    filtered_df = filtered_df[filtered_df['flip_zones'] > 0]
-                elif filter_type == "✅ NET GEX Positive":
-                    filtered_df = filtered_df[filtered_df['net_gex'] > 0]
-                elif filter_type == "❌ NET GEX Negative":
-                    filtered_df = filtered_df[filtered_df['net_gex'] < 0]
-                
-                st.success(f"✅ Found {len(filtered_df)} stocks matching filter: **{filter_type}**")
-                
-                if len(filtered_df) > 0:
-                    # Display results
-                    st.markdown("### 📊 Screener Results")
-                    filtered_df = filtered_df.sort_values('net_gex', key=abs, ascending=False)
-                    display_screener_results(filtered_df)
-                    
-                    # Visualization
-                    st.markdown("---")
-                    st.markdown("### 📊 Comparison Chart")
-                    fig = create_screener_summary_chart(filtered_df)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Export
-                    st.markdown("---")
-                    st.markdown("### 💾 Export Results")
-                    csv = filtered_df.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download Results (CSV)",
-                        data=csv,
-                        file_name=f"nyztrade_screener_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning(f"No stocks found matching the filter: {filter_type}")
-            else:
-                st.error("No data retrieved for any stocks")
+            mode_badge = "🚀 FULL FETCH"
+            mode_color = "#8b5cf6"
         
+        # Instrument badge
+        if instrument_type_label == "INDEX":
+            inst_badge = '<span class="index-badge">📊 INDEX</span>'
         else:
-            st.info("👈 Configure settings in sidebar and click 'Run Screener' to start screening")
+            inst_badge = '<span class="stock-badge">📈 STOCK</span>'
+        
+        st.markdown(f"""
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;">
+            {inst_badge}
+            <span style="padding: 6px 12px; background: {mode_color}20; border: 1px solid {mode_color}40; border-radius: 8px; color: {mode_color}; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;">{mode_badge}</span>
+            <span style="color: #94a3b8; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">{meta.get('symbol', symbol)} | Time: {selected_timestamp.strftime('%H:%M:%S IST')} | Spot: ₹{spot_price:,.2f} | Records: {meta.get('total_records', 0)}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Key metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        net_gex = df_selected['net_gex'].sum()
+        net_dex = df_selected['net_dex'].sum()
+        net_vanna = df_selected['net_vanna'].sum()
+        flip_zones = identify_gamma_flip_zones(df_selected, spot_price)
+        
+        with col1:
+            gex_color = "positive" if net_gex > 0 else "negative"
+            st.markdown(f"""
+            <div class="metric-card {gex_color}">
+                <div class="metric-label">NET GEX</div>
+                <div class="metric-value {gex_color}">{net_gex:.4f}{unit_label}</div>
+                <div class="metric-delta">{'🟢 Bullish' if net_gex > 0 else '🔴 Bearish'}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            dex_color = "positive" if net_dex > 0 else "negative"
+            st.markdown(f"""
+            <div class="metric-card {dex_color}">
+                <div class="metric-label">NET DEX</div>
+                <div class="metric-value {dex_color}">{net_dex:.4f}{unit_label}</div>
+                <div class="metric-delta">{'📈 Long Bias' if net_dex > 0 else '📉 Short Bias'}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            vanna_color = "positive" if net_vanna > 0 else "negative"
+            st.markdown(f"""
+            <div class="metric-card {vanna_color}">
+                <div class="metric-label">NET VANNA</div>
+                <div class="metric-value {vanna_color}">{net_vanna:.4f}{unit_label}</div>
+                <div class="metric-delta">Vol Sensitivity</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+            <div class="metric-card neutral">
+                <div class="metric-label">SPOT PRICE</div>
+                <div class="metric-value">₹{spot_price:,.2f}</div>
+                <div class="metric-delta">{meta.get('symbol', symbol)}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown(f"""
+            <div class="metric-card neutral">
+                <div class="metric-label">FLIP ZONES</div>
+                <div class="metric-value">{len(flip_zones)}</div>
+                <div class="metric-delta">Gamma Crossovers</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Main tabs
+        tabs = st.tabs([
+            "📈 Intraday Timeline",
+            "🎯 Standard GEX", 
+            "🚀 Enhanced GEX Overlay",
+            "🌊 Standard VANNA",
+            "🌊 Enhanced VANNA Overlay",
+            "📊 DEX Analysis",
+            "📋 OI Distribution",
+            "📁 Data Table"
+        ])
+        
+        with tabs[0]:
+            st.markdown("### 📈 Intraday Evolution")
+            st.plotly_chart(create_intraday_timeline(df, unit_label), use_container_width=True)
+        
+        with tabs[1]:
+            st.markdown("### 🎯 Standard Gamma Exposure (GEX)")
+            st.plotly_chart(create_separate_gex_chart(df_selected, spot_price, unit_label), use_container_width=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                positive_gex = df_selected[df_selected['net_gex'] > 0]['net_gex'].sum()
+                st.metric("Positive GEX", f"{positive_gex:.4f}{unit_label}")
+            with col2:
+                negative_gex = df_selected[df_selected['net_gex'] < 0]['net_gex'].sum()
+                st.metric("Negative GEX", f"{negative_gex:.4f}{unit_label}")
+        
+        with tabs[2]:
+            st.markdown("### 🚀 Enhanced GEX Overlay")
+            st.plotly_chart(create_enhanced_gex_overlay_chart(df_selected, spot_price, unit_label), use_container_width=True)
+            
+            if 'enhanced_oi_gex' in df_selected.columns:
+                enhanced_oi_gex_sum = abs(df_selected['enhanced_oi_gex'].sum())
+                
+                if enhanced_oi_gex_sum > 0.001:
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        original_total = df_selected['net_gex'].sum()
+                        st.metric("Original GEX Total", f"{original_total:.4f}{unit_label}")
+                    
+                    with col2:
+                        enhanced_total = df_selected['enhanced_oi_gex'].sum()
+                        st.metric("Enhanced OI GEX Total", f"{enhanced_total:.4f}{unit_label}")
+                    
+                    with col3:
+                        if abs(original_total) > 0.001:
+                            enhancement_ratio = enhanced_total / original_total
+                            st.metric("Enhancement Ratio", f"{enhancement_ratio:.2f}x")
+        
+        with tabs[3]:
+            st.markdown("### 🌊 Standard VANNA Exposure")
+            st.plotly_chart(create_standard_vanna_chart(df_selected, spot_price, unit_label), use_container_width=True)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                call_vanna_total = df_selected['call_vanna'].sum()
+                st.metric("Call VANNA Total", f"{call_vanna_total:.4f}{unit_label}")
+            with col2:
+                put_vanna_total = df_selected['put_vanna'].sum()
+                st.metric("Put VANNA Total", f"{put_vanna_total:.4f}{unit_label}")
+            with col3:
+                net_vanna_total = df_selected['net_vanna'].sum()
+                st.metric("Net VANNA Total", f"{net_vanna_total:.4f}{unit_label}")
+        
+        with tabs[4]:
+            st.markdown("### 🌊 Enhanced VANNA Overlay")
+            st.plotly_chart(create_enhanced_vanna_overlay_chart(df_selected, spot_price, unit_label), use_container_width=True)
+            
+            if 'enhanced_oi_vanna' in df_selected.columns:
+                enhanced_oi_vanna_sum = abs(df_selected['enhanced_oi_vanna'].sum())
+                
+                if enhanced_oi_vanna_sum > 0.001:
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        original_vanna_total = df_selected['net_vanna'].sum()
+                        st.metric("Original VANNA Total", f"{original_vanna_total:.4f}{unit_label}")
+                    
+                    with col2:
+                        enhanced_vanna_total = df_selected['enhanced_oi_vanna'].sum()
+                        st.metric("Enhanced OI VANNA Total", f"{enhanced_vanna_total:.4f}{unit_label}")
+                    
+                    with col3:
+                        if abs(original_vanna_total) > 0.001:
+                            vanna_enhancement_ratio = enhanced_vanna_total / original_vanna_total
+                            st.metric("VANNA Enhancement Ratio", f"{vanna_enhancement_ratio:.2f}x")
+        
+        with tabs[5]:
+            st.markdown("### 📊 Delta Exposure (DEX)")
+            st.plotly_chart(create_dex_chart(df_selected, spot_price, unit_label), use_container_width=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                call_dex_total = df_selected['call_dex'].sum()
+                st.metric("Call DEX", f"{call_dex_total:.4f}{unit_label}")
+            with col2:
+                put_dex_total = df_selected['put_dex'].sum()
+                st.metric("Put DEX", f"{put_dex_total:.4f}{unit_label}")
+        
+        with tabs[6]:
+            st.markdown("### 📋 Open Interest Distribution")
+            st.plotly_chart(create_oi_distribution_chart(df_selected, spot_price), use_container_width=True)
+        
+        with tabs[7]:
+            st.markdown("### 📁 Data Summary")
+            
+            st.markdown(f"""
+            **Symbol**: {meta.get('symbol', symbol)} ({meta.get('instrument_type', 'INDEX')})  
+            **Fetch Mode**: {fetch_mode.upper()}  
+            **Last Fetch**: {fetch_time}  
+            **Total Records**: {meta.get('total_records', 0)}  
+            **Time Range**: {meta.get('time_range', 'N/A')}  
+            **Contract Size**: {meta.get('contract_size', 'N/A')}  
+            **Unit**: ₹ {unit_label}
+            """)
+            
+            display_cols = ['strike', 'net_gex', 'net_dex', 'net_vanna', 'total_volume', 'call_oi', 'put_oi', 'call_iv', 'put_iv']
+            available_cols = [col for col in display_cols if col in df_selected.columns]
+            st.dataframe(df_selected[available_cols], use_container_width=True, height=400)
+            
+            # Download button
+            csv = df_selected.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Data (CSV)",
+                data=csv,
+                file_name=f"nyztrade_{meta.get('symbol', symbol)}_{target_date}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
     
+    else:
+        # Initial instructions
+        st.info("""
+        👋 **Welcome to NYZTrade UNIFIED Dashboard!**
+        
+        ### 🎯 Supports Both INDEX and STOCK Options:
+        
+        **📊 Index Options**
+        - NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY
+        - Weekly & Monthly expiries
+        - Values in ₹ Billions
+        
+        **📈 Stock Options (30 F&O Stocks)**
+        - Banking: HDFCBANK, ICICIBANK, SBIN, KOTAKBANK, AXISBANK...
+        - IT: TCS, INFY, WIPRO, HCLTECH, TECHM
+        - Energy: RELIANCE, ONGC, POWERGRID, NTPC...
+        - Auto: MARUTI, TATAMOTORS, M&M, LT
+        - FMCG: HINDUNILVR, ITC, ASIANPAINT, TITAN
+        - And more!
+        - Monthly & Weekly expiries
+        - Values in ₹ Crores
+        
+        ### 🔄 Smart Caching Features:
+        
+        **📦 Historical Data (Past Days)**
+        - Fetched once and cached permanently
+        - Instant loading on subsequent visits
+        
+        **📡 Current Trading Day (Live)**
+        - Incremental updates fetch only NEW data
+        - Auto-refresh available during market hours
+        
+        ### 📈 Available Charts:
+        - **Intraday Timeline**: GEX/DEX evolution over time
+        - **Standard GEX**: With Gamma Flip Zones
+        - **Enhanced GEX Overlay**: OI-based with Greeks adjustments
+        - **Standard VANNA**: Call/Put breakdown
+        - **Enhanced VANNA Overlay**: With Volume/IV adjustments
+        - **DEX Analysis**: Delta Exposure
+        - **OI Distribution**: Call vs Put Open Interest
+        
+        **Click "🚀 Fetch Data" to begin!**
+        """)
+    
+    # Footer
     st.markdown("---")
-    st.markdown(f"""<div style="text-align: center; padding: 20px;">
-        <p style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #64748b;">
-        NYZTrade Stock Options | Complete Unified Dashboard<br>
-        ALL Charts | Cache System | VANNA/CHARM | Predictive Models | Screener</p>
-        <p style="font-size: 0.75rem;">⚠️ For educational purposes only</p>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="text-align: center; padding: 20px; color: #64748b;">
+        <p style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">
+            NYZTrade Unified GEX/DEX Dashboard | INDEX + STOCK Options<br>
+            Smart Caching | VANNA/CHARM | Gamma Flip Zones | Drawing Tools
+        </p>
+        <p style="font-size: 0.75rem; margin-top: 8px;">
+            ⚠️ For educational and research purposes only. Not financial advice.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
